@@ -1,0 +1,65 @@
+name: Deploy CloudFormation Foundation
+
+on:
+  workflow_dispatch:  # Manual trigger
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        default: 'deploy'
+        type: choice
+        options:
+          - deploy
+          - list-resources
+      confirm_destruction:
+        description: 'Type DESTROY to confirm destruction (only for destroy action)'
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'deploy' || github.event.inputs.action == 'list-resources'
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y gh
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ADMIN_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Verify Prerequisites
+        run: ./scripts/verify-prerequisites.sh
+
+      - name: Deploy Foundation
+        if: github.event.inputs.action == 'deploy'
+        run: ./scripts/deploy.sh
+
+      - name: List Resources
+        if: github.event.inputs.action == 'list-resources'
+        run: ./scripts/list-deployed-resources.sh
+
+      - name: Summary
+        if: github.event.inputs.action == 'deploy'
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ CloudFormation foundation deployed successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Next Steps" >> $GITHUB_STEP_SUMMARY
+          echo "1. Deploy Project 2: terraform-aws-shared-modules" >> $GITHUB_STEP_SUMMARY
+          echo "2. Deploy Project 3: terraform-aws-deployment-roles" >> $GITHUB_STEP_SUMMARY
+          echo "3. Deploy Project 4+: Application projects" >> $GITHUB_STEP_SUMMARY

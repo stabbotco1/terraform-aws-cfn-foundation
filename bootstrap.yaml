@@ -1,0 +1,206 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Terraform Foundation - Shared backend resources for OpenTofu state management'
+
+Parameters:
+  OidcAction:
+    Type: String
+    Default: 'create'
+    AllowedValues: ['create', 'reuse']
+    Description: 'Whether to create new OIDC provider or reuse existing one'
+
+Conditions:
+  CreateOidcProvider: !Equals [!Ref OidcAction, 'create']
+
+Resources:
+  # S3 Bucket for access logs (must be created first)
+  TerraformStateLogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'terraform-state-logs-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireLogs
+            Status: Enabled
+            ExpirationInDays: 90
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+  # Bucket policy to allow S3 log delivery
+  TerraformStateLogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TerraformStateLogBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: S3ServerAccessLogsPolicy
+            Effect: Allow
+            Principal:
+              Service: logging.s3.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${TerraformStateLogBucket.Arn}/access-logs/*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  # S3 Bucket for Terraform state storage
+  TerraformStateBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: TerraformStateLogBucketPolicy
+    Properties:
+      BucketName: !Sub 'terraform-state-${AWS::AccountId}-${AWS::Region}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: IntelligentTiering
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 0
+                StorageClass: INTELLIGENT_TIERING
+          - Id: BackupRetention
+            Status: Enabled
+            Prefix: 'backups/'
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: INTELLIGENT_TIERING
+            ExpirationInDays: 365
+      LoggingConfiguration:
+        DestinationBucketName: !Ref TerraformStateLogBucket
+        LogFilePrefix: 'access-logs/'
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+  # DynamoDB table for state locking
+  TerraformLockTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'terraform-locks-${AWS::AccountId}-${AWS::Region}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: LockID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: LockID
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      DeletionProtectionEnabled: true
+      Tags:
+        - Key: Purpose
+          Value: TerraformStateLocking
+        - Key: ManagedBy
+          Value: CloudFormation
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+  # GitHub OIDC Provider (conditional creation)
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+      Tags:
+        - Key: Purpose
+          Value: GitHubActionsOIDC
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # Parameter Store entries for configuration distribution
+  S3BucketParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /terraform/foundation/s3-state-bucket
+      Type: String
+      Value: !Ref TerraformStateBucket
+      Description: 'S3 bucket name for Terraform state storage'
+      Tags:
+        Purpose: TerraformFoundation
+        ManagedBy: CloudFormation
+
+  DynamoDBTableParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /terraform/foundation/dynamodb-lock-table
+      Type: String
+      Value: !Ref TerraformLockTable
+      Description: 'DynamoDB table name for Terraform state locking'
+      Tags:
+        Purpose: TerraformFoundation
+        ManagedBy: CloudFormation
+
+  OidcProviderParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /terraform/foundation/oidc-github-provider
+      Type: String
+      Value: !If
+        - CreateOidcProvider
+        - !Ref GitHubOidcProvider
+        - !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+      Description: 'GitHub OIDC provider ARN for authentication'
+      Tags:
+        Purpose: TerraformFoundation
+        ManagedBy: CloudFormation
+
+  SharedModulesRepoParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /terraform/foundation/shared-modules-repository
+      Type: String
+      Value: 'terraform-aws-shared-modules'
+      Description: 'Shared modules repository name'
+      Tags:
+        Purpose: TerraformFoundation
+        ManagedBy: CloudFormation
+
+Outputs:
+  TerraformStateBucket:
+    Description: 'S3 bucket for Terraform state storage'
+    Value: !Ref TerraformStateBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-StateBucket'
+
+  TerraformLockTable:
+    Description: 'DynamoDB table for Terraform state locking'
+    Value: !Ref TerraformLockTable
+    Export:
+      Name: !Sub '${AWS::StackName}-LockTable'
+
+  GitHubOidcProviderArn:
+    Description: 'GitHub OIDC provider ARN'
+    Value: !If
+      - CreateOidcProvider
+      - !Ref GitHubOidcProvider
+      - !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+    Export:
+      Name: !Sub '${AWS::StackName}-OidcProvider'
+
+  StackName:
+    Description: 'CloudFormation stack name'
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub '${AWS::StackName}-StackName'

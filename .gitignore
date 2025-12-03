@@ -1,0 +1,26 @@
+# CloudFormation
+*.swp
+*~
+
+# Sensitive files
+*.pem
+*.key
+.env
+.aws/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
