@@ -166,6 +166,7 @@ esac
 # Define resource names
 STATE_BUCKET="terraform-state-${ACCOUNT_ID}-${REGION}"
 LOG_BUCKET="terraform-state-logs-${ACCOUNT_ID}-${REGION}"
+CLOUDTRAIL_BUCKET="cloudtrail-logs-${ACCOUNT_ID}-${REGION}"
 STACK_NAME="terraform-shared-infrastructure"
 
 # Check for existing stack first
@@ -227,6 +228,7 @@ if aws cloudformation describe-stacks --stack-name "$STACK_NAME" &>/dev/null; th
       # Clean up orphaned buckets from failed creation
       delete_versioned_bucket "$STATE_BUCKET"
       delete_versioned_bucket "$LOG_BUCKET"
+      delete_versioned_bucket "$CLOUDTRAIL_BUCKET"
 
       # Check and clean up OIDC provider if it exists
       OIDC_PROVIDER_ARN=$(aws iam list-open-id-connect-providers \
@@ -291,15 +293,17 @@ else
 
   STATE_BUCKET_STATE=$(detect_bucket_state "$STATE_BUCKET")
   LOG_BUCKET_STATE=$(detect_bucket_state "$LOG_BUCKET")
+  CLOUDTRAIL_BUCKET_STATE=$(detect_bucket_state "$CLOUDTRAIL_BUCKET")
 
-  if [ "$STATE_BUCKET_STATE" = "orphaned" ] || [ "$LOG_BUCKET_STATE" = "orphaned" ]; then
+  if [ "$STATE_BUCKET_STATE" = "orphaned" ] || [ "$LOG_BUCKET_STATE" = "orphaned" ] || [ "$CLOUDTRAIL_BUCKET_STATE" = "orphaned" ]; then
     echo "ℹ Orphaned S3 buckets detected from previous deployment"
     echo "  State bucket: $STATE_BUCKET_STATE"
     echo "  Log bucket: $LOG_BUCKET_STATE"
+    echo "  CloudTrail bucket: $CLOUDTRAIL_BUCKET_STATE"
     echo ""
     echo "  Options:"
-    echo "    1. Import buckets into new stack (preserves existing state)"
-    echo "    2. Delete buckets and create fresh (destroys all state)"
+    echo "    1. Import buckets into new stack (preserves existing state/logs)"
+    echo "    2. Delete buckets and create fresh (destroys all state/logs)"
     echo ""
     read -p "Import buckets? (y/N): " IMPORT_CHOICE
 
@@ -350,6 +354,7 @@ else
 
       delete_versioned_bucket "$STATE_BUCKET"
       delete_versioned_bucket "$LOG_BUCKET"
+      delete_versioned_bucket "$CLOUDTRAIL_BUCKET"
       echo "✓ Orphaned buckets cleaned up"
       ACTION="create"
     fi
@@ -393,6 +398,20 @@ EOF
     "LogicalResourceId": "TerraformStateLogBucket",
     "ResourceIdentifier": {
       "BucketName": "$LOG_BUCKET"
+    }
+  }
+EOF
+    FIRST=false
+  fi
+
+  if [ "$CLOUDTRAIL_BUCKET_STATE" = "orphaned" ]; then
+    [ "$FIRST" = false ] && echo "," >> /tmp/resources-to-import.json
+    cat >> /tmp/resources-to-import.json <<EOF
+  {
+    "ResourceType": "AWS::S3::Bucket",
+    "LogicalResourceId": "CloudTrailLogBucket",
+    "ResourceIdentifier": {
+      "BucketName": "$CLOUDTRAIL_BUCKET"
     }
   }
 EOF
@@ -578,7 +597,7 @@ TABLE=$(aws cloudformation describe-stacks \
 
 OIDC_ARN=$(aws cloudformation describe-stacks \
   --stack-name "$STACK_NAME" \
-  --query 'Stacks[0].Outputs[?OutputKey==`GitHubOidcProviderArn`].OutputValue' \
+  --query 'Stacks[0].Outputs[?OutputKey==`OidcProviderArn`].OutputValue' \
   --output text)
 
 echo "✓ Foundation deployment complete"
@@ -586,11 +605,13 @@ echo ""
 echo "Resources created:"
 echo "  S3 State Bucket: $BUCKET"
 echo "  DynamoDB Lock Table: $TABLE"
-echo "  GitHub OIDC Provider: $OIDC_ARN"
+echo "  OIDC Provider: $OIDC_ARN"
 echo ""
 echo "Parameter Store entries created:"
 echo "  /terraform/foundation/s3-state-bucket"
 echo "  /terraform/foundation/dynamodb-lock-table"
-echo "  /terraform/foundation/oidc-github-provider"
-echo "  /terraform/foundation/shared-modules-repository"
+echo "  /terraform/foundation/oidc-provider"
+echo ""
+echo "Next steps:"
+echo "  Deploy terraform-aws-deployment-roles for IAM role management"
 echo ""

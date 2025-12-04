@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Terraform Foundation - Shared backend resources for state management'
+Description: 'Terraform Foundation - Shared backend resources for Terraform/OpenTofu state management'
 
 Parameters:
   CloudTrailEnabled:
@@ -57,6 +57,113 @@ Conditions:
   EnableCloudTrail: !Equals [!Ref CloudTrailEnabled, 'true']
 
 Resources:
+  # S3 Bucket for CloudTrail logs
+  CloudTrailLogBucket:
+    Type: AWS::S3::Bucket
+    Condition: EnableCloudTrail
+    Properties:
+      BucketName: !Sub 'cloudtrail-logs-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: IntelligentTiering
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 0
+                StorageClass: INTELLIGENT_TIERING
+          - Id: ExpireLogs
+            Status: Enabled
+            ExpirationInDays: 90
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Repository
+          Value: !Ref Repository
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: Region
+          Value: !Ref AWS::Region
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
+        - Key: ManagedBy
+          Value: !Ref ManagedBy
+        - Key: DeploymentID
+          Value: !Ref DeploymentID
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+  # Bucket policy for CloudTrail
+  CloudTrailLogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: EnableCloudTrail
+    Properties:
+      Bucket: !Ref CloudTrailLogBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSCloudTrailAclCheck
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt CloudTrailLogBucket.Arn
+          - Sid: AWSCloudTrailWrite
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${CloudTrailLogBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                s3:x-amz-acl: bucket-owner-full-control
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  # CloudTrail for tracking management events (IAM/STS/etc)
+  CloudTrail:
+    Type: AWS::CloudTrail::Trail
+    Condition: EnableCloudTrail
+    DependsOn: CloudTrailLogBucketPolicy
+    Properties:
+      TrailName: !Sub 'terraform-foundation-${AWS::AccountId}'
+      S3BucketName: !Ref CloudTrailLogBucket
+      IncludeGlobalServiceEvents: true
+      IsLogging: true
+      IsMultiRegionTrail: true
+      EventSelectors:
+        - ReadWriteType: All
+          IncludeManagementEvents: true
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Repository
+          Value: !Ref Repository
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: Region
+          Value: !Ref AWS::Region
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
+        - Key: ManagedBy
+          Value: !Ref ManagedBy
+        - Key: DeploymentID
+          Value: !Ref DeploymentID
+
   # S3 Bucket for access logs (must be created first)
   TerraformStateLogBucket:
     Type: AWS::S3::Bucket
@@ -210,8 +317,8 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
 
-  # GitHub OIDC Provider (auto-detected and created)
-  GitHubOidcProvider:
+  # OIDC Provider (auto-detected from git remote: GitHub, GitLab, or Bitbucket)
+  OidcProvider:
     Type: AWS::IAM::OIDCProvider
     Properties:
       Url: !Ref OidcUrl
@@ -272,10 +379,10 @@ Resources:
   OidcProviderParameter:
     Type: AWS::SSM::Parameter
     Properties:
-      Name: /terraform/foundation/oidc-github-provider
+      Name: /terraform/foundation/oidc-provider
       Type: String
-      Value: !Ref GitHubOidcProvider
-      Description: 'GitHub OIDC provider ARN for authentication'
+      Value: !Ref OidcProvider
+      Description: 'OIDC provider ARN for CI/CD authentication'
       Tags:
         Project: !Ref Project
         Repository: !Ref Repository
@@ -296,9 +403,9 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-LockTable'
 
-  GitHubOidcProviderArn:
-    Description: 'GitHub OIDC provider ARN'
-    Value: !Ref GitHubOidcProvider
+  OidcProviderArn:
+    Description: 'OIDC provider ARN for CI/CD authentication'
+    Value: !Ref OidcProvider
     Export:
       Name: !Sub '${AWS::StackName}-OidcProvider'
 

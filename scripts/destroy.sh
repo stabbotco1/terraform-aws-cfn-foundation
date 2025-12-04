@@ -58,6 +58,7 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGION=${AWS_REGION:-$(aws configure get region || echo "us-east-1")}
 STATE_BUCKET="terraform-state-${ACCOUNT_ID}-${REGION}"
 LOG_BUCKET="terraform-state-logs-${ACCOUNT_ID}-${REGION}"
+CLOUDTRAIL_BUCKET="cloudtrail-logs-${ACCOUNT_ID}-${REGION}"
 
 # Check if stack exists
 STACK_EXISTS=false
@@ -67,7 +68,7 @@ fi
 
 # Check for orphaned buckets
 ORPHANED_BUCKETS=false
-if aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null || aws s3api head-bucket --bucket "$LOG_BUCKET" 2>/dev/null; then
+if aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null || aws s3api head-bucket --bucket "$LOG_BUCKET" 2>/dev/null || aws s3api head-bucket --bucket "$CLOUDTRAIL_BUCKET" 2>/dev/null; then
   ORPHANED_BUCKETS=true
 fi
 
@@ -148,6 +149,11 @@ if [ "$STACK_EXISTS" = false ]; then
       delete_versioned_bucket "$LOG_BUCKET"
     fi
 
+    if aws s3api head-bucket --bucket "$CLOUDTRAIL_BUCKET" 2>/dev/null; then
+      echo "  Found orphaned CloudTrail bucket: $CLOUDTRAIL_BUCKET"
+      delete_versioned_bucket "$CLOUDTRAIL_BUCKET"
+    fi
+
     echo ""
     echo "=========================================="
     echo "✓ DESTRUCTION COMPLETE"
@@ -195,11 +201,13 @@ RESOURCES=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAM
 # Extract resource information
 STATE_BUCKET=$(echo "$RESOURCES" | jq -r '.StackResources[] | select(.ResourceType=="AWS::S3::Bucket" and .LogicalResourceId=="TerraformStateBucket") | .PhysicalResourceId' 2>/dev/null || echo "")
 LOG_BUCKET=$(echo "$RESOURCES" | jq -r '.StackResources[] | select(.ResourceType=="AWS::S3::Bucket" and .LogicalResourceId=="TerraformStateLogBucket") | .PhysicalResourceId' 2>/dev/null || echo "")
+CLOUDTRAIL_BUCKET=$(echo "$RESOURCES" | jq -r '.StackResources[] | select(.ResourceType=="AWS::S3::Bucket" and .LogicalResourceId=="CloudTrailLogBucket") | .PhysicalResourceId' 2>/dev/null || echo "")
 DYNAMODB_TABLE=$(echo "$RESOURCES" | jq -r '.StackResources[] | select(.ResourceType=="AWS::DynamoDB::Table") | .PhysicalResourceId' 2>/dev/null || echo "")
 
 echo "Resources to destroy:"
 [ -n "$STATE_BUCKET" ] && echo "  - S3 State Bucket: $STATE_BUCKET $([ "$DESTROY_BUCKETS" = true ] && echo '(will delete)' || echo '(will retain)')"
 [ -n "$LOG_BUCKET" ] && echo "  - S3 Log Bucket: $LOG_BUCKET $([ "$DESTROY_BUCKETS" = true ] && echo '(will delete)' || echo '(will retain)')"
+[ -n "$CLOUDTRAIL_BUCKET" ] && echo "  - S3 CloudTrail Bucket: $CLOUDTRAIL_BUCKET $([ "$DESTROY_BUCKETS" = true ] && echo '(will delete)' || echo '(will retain)')"
 [ -n "$DYNAMODB_TABLE" ] && echo "  - DynamoDB Table: $DYNAMODB_TABLE (will delete)"
 echo ""
 
@@ -231,6 +239,10 @@ if [ "$DESTROY_BUCKETS" = true ]; then
 
   if [ -n "$LOG_BUCKET" ]; then
     delete_versioned_bucket "$LOG_BUCKET"
+  fi
+
+  if [ -n "$CLOUDTRAIL_BUCKET" ]; then
+    delete_versioned_bucket "$CLOUDTRAIL_BUCKET"
   fi
 
   echo "✓ Buckets emptied"
@@ -294,6 +306,14 @@ if [ "$DESTROY_BUCKETS" = true ]; then
     } || echo "  ⚠ Failed to delete log bucket (may already be deleted)"
   fi
 
+  if [ -n "$CLOUDTRAIL_BUCKET" ] && aws s3api head-bucket --bucket "$CLOUDTRAIL_BUCKET" 2>/dev/null; then
+    echo "  CloudTrail bucket still exists (retained by DeletionPolicy), deleting..."
+    aws s3api delete-bucket --bucket "$CLOUDTRAIL_BUCKET" 2>/dev/null && {
+      echo "  ✓ CloudTrail bucket deleted"
+      CLEANED_BUCKETS=true
+    } || echo "  ⚠ Failed to delete CloudTrail bucket (may already be deleted)"
+  fi
+
   if [ "$CLEANED_BUCKETS" = false ]; then
     echo "  All buckets already cleaned up"
   fi
@@ -313,6 +333,7 @@ else
   echo "Retained buckets:"
   [ -n "$STATE_BUCKET" ] && echo "  - $STATE_BUCKET"
   [ -n "$LOG_BUCKET" ] && echo "  - $LOG_BUCKET"
+  [ -n "$CLOUDTRAIL_BUCKET" ] && echo "  - $CLOUDTRAIL_BUCKET"
   echo ""
   echo "To redeploy, run: ./scripts/deploy.sh"
   echo "(Orphaned buckets will be automatically imported)"
