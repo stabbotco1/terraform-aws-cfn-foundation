@@ -37,6 +37,22 @@ Parameters:
     Type: String
     Description: 'Deployment identifier'
 
+  OidcProvider:
+    Type: String
+    Description: 'OIDC provider type (github, gitlab, bitbucket)'
+
+  OidcUrl:
+    Type: String
+    Description: 'OIDC provider URL'
+
+  OidcThumbprints:
+    Type: CommaDelimitedList
+    Description: 'OIDC provider thumbprints (comma-separated)'
+
+  OidcAudience:
+    Type: String
+    Description: 'OIDC provider audience'
+
 Conditions:
   EnableCloudTrail: !Equals [!Ref CloudTrailEnabled, 'true']
 
@@ -194,8 +210,35 @@ Resources:
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
 
-  # GitHub OIDC Provider (always reference existing ARN)
-  # OIDC provider must exist - deploy.sh will verify
+  # GitHub OIDC Provider (auto-detected and created)
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: !Ref OidcUrl
+      ClientIdList:
+        - !Ref OidcAudience
+      ThumbprintList: !Ref OidcThumbprints
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Repository
+          Value: !Ref Repository
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: Region
+          Value: !Ref AWS::Region
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
+        - Key: ManagedBy
+          Value: !Ref ManagedBy
+        - Key: DeploymentID
+          Value: !Ref DeploymentID
+        - Key: OidcProvider
+          Value: !Ref OidcProvider
 
   # Parameter Store entries for configuration distribution
   S3BucketParameter:
@@ -231,7 +274,7 @@ Resources:
     Properties:
       Name: /terraform/foundation/oidc-github-provider
       Type: String
-      Value: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+      Value: !Ref GitHubOidcProvider
       Description: 'GitHub OIDC provider ARN for authentication'
       Tags:
         Project: !Ref Project
@@ -269,7 +312,7 @@ Outputs:
 
   GitHubOidcProviderArn:
     Description: 'GitHub OIDC provider ARN'
-    Value: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+    Value: !Ref GitHubOidcProvider
     Export:
       Name: !Sub '${AWS::StackName}-OidcProvider'
 

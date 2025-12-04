@@ -62,52 +62,106 @@ echo "  Deployment ID: $DEPLOYMENT_ID"
 CLOUDTRAIL_ENABLED=${FEATURE_CLOUDTRAIL_ENABLED:-"true"}
 echo "  CloudTrail Enabled: $CLOUDTRAIL_ENABLED"
 
-# Check for existing OIDC provider
+# Detect OIDC provider from git remote
 echo ""
-echo "Step 3: Checking for existing OIDC provider..."
-EXISTING_OIDC=$(aws iam list-open-id-connect-providers \
-  --query "OpenIDConnectProviderList[?contains(Arn, 'token.actions.githubusercontent.com')].Arn" \
-  --output text 2>/dev/null || echo "")
+echo "Step 3: Detecting OIDC provider from repository..."
 
-if [ -n "$EXISTING_OIDC" ]; then
-  echo "ℹ Existing OIDC provider found: $EXISTING_OIDC"
+detect_oidc_provider() {
+  local repo_url="$1"
   
-  # Validate existing provider
-  echo "  Validating existing provider..."
-  THUMBPRINT=$(aws iam get-open-id-connect-provider \
-    --open-id-connect-provider-arn "$EXISTING_OIDC" \
-    --query 'ThumbprintList[0]' \
-    --output text 2>/dev/null || echo "")
-  
-  EXPECTED_THUMBPRINT="6938fd4d98bab03faadb97b34396831e3780aea1"
-  
-  if [ "$THUMBPRINT" = "$EXPECTED_THUMBPRINT" ]; then
-    echo "  ✓ Thumbprint is valid"
+  if [[ "$repo_url" =~ github\.com ]]; then
+    echo "github"
+  elif [[ "$repo_url" =~ gitlab\.com ]]; then
+    echo "gitlab"
+  elif [[ "$repo_url" =~ bitbucket\.org ]]; then
+    echo "bitbucket"
   else
-    echo "  ⚠ Thumbprint mismatch - may need update"
-    echo "    Expected: $EXPECTED_THUMBPRINT"
-    echo "    Found: $THUMBPRINT"
+    echo "unsupported"
+  fi
+}
+
+calculate_thumbprint() {
+  local url="$1"
+  
+  # Extract host from URL
+  local host=$(echo "$url" | sed -E 's|https?://([^/]+).*|\1|')
+  
+  # Get certificate and calculate thumbprint
+  local thumbprint=$(echo | openssl s_client -servername "$host" -connect "$host:443" 2>/dev/null | \
+    openssl x509 -fingerprint -sha1 -noout 2>/dev/null | \
+    cut -d'=' -f2 | tr -d ':' | tr '[:upper:]' '[:lower:]')
+  
+  if [ -z "$thumbprint" ]; then
+    echo "ERROR: Failed to calculate thumbprint for $url" >&2
+    return 1
   fi
   
-  # Validate audience
-  AUDIENCES=$(aws iam get-open-id-connect-provider \
-    --open-id-connect-provider-arn "$EXISTING_OIDC" \
-    --query 'ClientIDList' \
-    --output json 2>/dev/null || echo "[]")
+  echo "$thumbprint"
+}
+
+OIDC_PROVIDER=$(detect_oidc_provider "$REPOSITORY")
+
+case "$OIDC_PROVIDER" in
+  github)
+    echo "  Provider: GitHub"
+    OIDC_URL="https://token.actions.githubusercontent.com"
+    OIDC_AUDIENCE="sts.amazonaws.com"
+    # GitHub requires both thumbprints for reliability
+    OIDC_THUMBPRINTS="6938fd4d98bab03faadb97b34396831e3780aea1,1c58a3a8518e8759bf075b76b750d4f2df264fcd"
+    echo "  URL: $OIDC_URL"
+    echo "  Audience: $OIDC_AUDIENCE"
+    echo "  Thumbprints: Using GitHub's known thumbprints"
+    ;;
   
-  if echo "$AUDIENCES" | grep -q "sts.amazonaws.com"; then
-    echo "  ✓ Audience includes sts.amazonaws.com"
-  else
-    echo "  ⚠ Missing required audience: sts.amazonaws.com"
-  fi
-else
-  echo "✗ No existing OIDC provider found"
-  echo "  Please create OIDC provider manually:"
-  echo "  URL: https://token.actions.githubusercontent.com"
-  echo "  Audience: sts.amazonaws.com"
-  echo "  Thumbprint: 6938fd4d98bab03faadb97b34396831e3780aea1"
-  exit 1
-fi
+  gitlab)
+    echo "  Provider: GitLab"
+    OIDC_URL="https://gitlab.com"
+    OIDC_AUDIENCE="sts.amazonaws.com"
+    echo "  URL: $OIDC_URL"
+    echo "  Calculating thumbprint..."
+    OIDC_THUMBPRINTS=$(calculate_thumbprint "$OIDC_URL")
+    if [ $? -ne 0 ]; then
+      echo "✗ Failed to calculate GitLab thumbprint"
+      echo "  Please ensure openssl is installed and gitlab.com is accessible"
+      exit 1
+    fi
+    echo "  Thumbprint: $OIDC_THUMBPRINTS"
+    echo "  Audience: $OIDC_AUDIENCE"
+    ;;
+  
+  bitbucket)
+    echo "  Provider: Bitbucket"
+    # Extract workspace from Bitbucket URL
+    # Format: https://bitbucket.org/workspace/repo or git@bitbucket.org:workspace/repo
+    WORKSPACE=$(echo "$REPOSITORY" | sed -E 's|.*bitbucket\.org[:/]([^/]+)/.*|\1|')
+    
+    if [ -z "$WORKSPACE" ]; then
+      echo "✗ Failed to extract Bitbucket workspace from repository URL"
+      exit 1
+    fi
+    
+    OIDC_URL="https://api.bitbucket.org/2.0/workspaces/$WORKSPACE/pipelines-config/identity/oidc"
+    OIDC_AUDIENCE="ari:cloud:bitbucket::workspace/$WORKSPACE"
+    OIDC_THUMBPRINTS="a031c46782e6e6c662c2c87c76da9aa62ccabd8e"
+    echo "  Workspace: $WORKSPACE"
+    echo "  URL: $OIDC_URL"
+    echo "  Audience: $OIDC_AUDIENCE"
+    echo "  Thumbprint: Using Bitbucket's known thumbprint"
+    ;;
+  
+  unsupported)
+    echo "✗ Unsupported git provider"
+    echo "  Repository: $REPOSITORY"
+    echo ""
+    echo "Supported providers:"
+    echo "  - GitHub (github.com)"
+    echo "  - GitLab (gitlab.com)"
+    echo "  - Bitbucket (bitbucket.org)"
+    echo ""
+    echo "For self-hosted or other providers, please configure OIDC manually."
+    exit 1
+    ;;
+esac
 
 # Detect bucket state
 echo ""
@@ -192,7 +246,11 @@ EOF
       ParameterKey=Owner,ParameterValue="$OWNER" \
       ParameterKey=DeployedBy,ParameterValue="$DEPLOYED_BY" \
       ParameterKey=ManagedBy,ParameterValue="$MANAGED_BY" \
-      ParameterKey=DeploymentID,ParameterValue="$DEPLOYMENT_ID"
+      ParameterKey=DeploymentID,ParameterValue="$DEPLOYMENT_ID" \
+      ParameterKey=OidcProvider,ParameterValue="$OIDC_PROVIDER" \
+      ParameterKey=OidcUrl,ParameterValue="$OIDC_URL" \
+      ParameterKey=OidcThumbprints,ParameterValue="$OIDC_THUMBPRINTS" \
+      ParameterKey=OidcAudience,ParameterValue="$OIDC_AUDIENCE"
   
   # Wait for changeset creation
   sleep 5
@@ -285,6 +343,10 @@ if [ "$ACTION" = "create" ]; then
       ParameterKey=DeployedBy,ParameterValue="$DEPLOYED_BY" \
       ParameterKey=ManagedBy,ParameterValue="$MANAGED_BY" \
       ParameterKey=DeploymentID,ParameterValue="$DEPLOYMENT_ID" \
+      ParameterKey=OidcProvider,ParameterValue="$OIDC_PROVIDER" \
+      ParameterKey=OidcUrl,ParameterValue="$OIDC_URL" \
+      ParameterKey=OidcThumbprints,ParameterValue="$OIDC_THUMBPRINTS" \
+      ParameterKey=OidcAudience,ParameterValue="$OIDC_AUDIENCE" \
     --enable-termination-protection \
     --tags \
       Key=Project,Value="$PROJECT" \
@@ -316,6 +378,10 @@ else
       ParameterKey=DeployedBy,ParameterValue="$DEPLOYED_BY" \
       ParameterKey=ManagedBy,ParameterValue="$MANAGED_BY" \
       ParameterKey=DeploymentID,ParameterValue="$DEPLOYMENT_ID" \
+      ParameterKey=OidcProvider,ParameterValue="$OIDC_PROVIDER" \
+      ParameterKey=OidcUrl,ParameterValue="$OIDC_URL" \
+      ParameterKey=OidcThumbprints,ParameterValue="$OIDC_THUMBPRINTS" \
+      ParameterKey=OidcAudience,ParameterValue="$OIDC_AUDIENCE" \
     --tags \
       Key=Project,Value="$PROJECT" \
       Key=Repository,Value="$REPOSITORY" \

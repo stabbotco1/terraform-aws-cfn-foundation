@@ -199,6 +199,17 @@ check_required_files() {
   fi
 }
 
+check_openssl() {
+  if command -v openssl &>/dev/null; then
+    OPENSSL_VERSION=$(openssl version | cut -d' ' -f2)
+    echo -e "${GREEN}✓${NC} openssl is installed (Version: $OPENSSL_VERSION)"
+  else
+    echo -e "${RED}✗${NC} openssl not found (required for GitLab OIDC thumbprint calculation)"
+    echo "  Install: brew install openssl (macOS) or apt-get install openssl (Linux)"
+    FAILURES+=("openssl required")
+  fi
+}
+
 check_bash_version() {
   BASH_VERSION=${BASH_VERSION:-"unknown"}
   if [[ "$BASH_VERSION" =~ ^[4-9] ]]; then
@@ -232,6 +243,7 @@ check_aws_auth
 check_aws_permissions
 check_github_cli
 check_jq
+check_openssl
 check_required_files
 
 # Report results
