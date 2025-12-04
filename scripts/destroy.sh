@@ -13,45 +13,6 @@ echo "Verifying prerequisites..."
 ./scripts/verify-prerequisites.sh || exit 1
 
 echo ""
-echo "=========================================="
-echo "TERRAFORM FOUNDATION DESTRUCTION"
-echo "=========================================="
-echo ""
-echo "⚠️  WARNING: This will permanently delete:"
-echo "  - CloudFormation stack: $STACK_NAME"
-echo "  - DynamoDB lock table (always deleted)"
-echo "  - All SSM parameters"
-echo "  - S3 buckets (optional - see next prompt)"
-echo ""
-echo "This action is IRREVERSIBLE."
-echo ""
-
-# Require DESTROY confirmation
-read -p "Type 'DESTROY' to confirm: " confirmation
-
-if [ "$confirmation" != "DESTROY" ]; then
-  echo "Destruction cancelled"
-  exit 0
-fi
-
-# Ask about S3 buckets
-echo ""
-echo "S3 buckets contain Terraform state and are protected by default."
-echo "⚠️  Deleting buckets will permanently destroy all state history."
-echo ""
-read -p "Type 'DELETE BUCKETS' to destroy buckets (or press Enter to retain): " bucket_confirm
-
-if [ "$bucket_confirm" = "DELETE BUCKETS" ]; then
-  DESTROY_BUCKETS=true
-  echo "✓ Buckets will be destroyed"
-else
-  DESTROY_BUCKETS=false
-  echo "✓ Buckets will be retained"
-fi
-
-echo ""
-echo "Starting destruction process..."
-echo ""
 
 # Function to safely delete a versioned S3 bucket
 delete_versioned_bucket() {
@@ -99,37 +60,105 @@ STATE_BUCKET="terraform-state-${ACCOUNT_ID}-${REGION}"
 LOG_BUCKET="terraform-state-logs-${ACCOUNT_ID}-${REGION}"
 
 # Check if stack exists
-if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" &>/dev/null; then
+STACK_EXISTS=false
+if aws cloudformation describe-stacks --stack-name "$STACK_NAME" &>/dev/null; then
+  STACK_EXISTS=true
+fi
+
+# Check for orphaned buckets
+ORPHANED_BUCKETS=false
+if aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null || aws s3api head-bucket --bucket "$LOG_BUCKET" 2>/dev/null; then
+  ORPHANED_BUCKETS=true
+fi
+
+# If nothing exists, exit early
+if [ "$STACK_EXISTS" = false ] && [ "$ORPHANED_BUCKETS" = false ]; then
+  echo "ℹ Stack '$STACK_NAME' does not exist"
+  echo "ℹ No orphaned buckets found"
+  echo ""
+  echo "✓ No resources to destroy"
+  exit 0
+fi
+
+# Show what will be destroyed
+echo "=========================================="
+echo "TERRAFORM FOUNDATION DESTRUCTION"
+echo "=========================================="
+echo ""
+echo "⚠️  WARNING: This will permanently delete:"
+
+if [ "$STACK_EXISTS" = true ]; then
+  echo "  - CloudFormation stack: $STACK_NAME"
+  echo "  - DynamoDB lock table (always deleted)"
+  echo "  - All SSM parameters"
+fi
+
+if [ "$ORPHANED_BUCKETS" = true ]; then
+  echo "  - Orphaned S3 buckets (optional - see next prompt)"
+elif [ "$STACK_EXISTS" = true ]; then
+  echo "  - S3 buckets (optional - see next prompt)"
+fi
+
+echo ""
+echo "This action is IRREVERSIBLE."
+echo ""
+
+# Require DESTROY confirmation
+read -p "Type 'DESTROY' to confirm: " confirmation
+
+if [ "$confirmation" != "DESTROY" ]; then
+  echo "Destruction cancelled"
+  exit 0
+fi
+
+# Ask about S3 buckets if they exist or might exist
+echo ""
+echo "S3 buckets contain Terraform state and are protected by default."
+echo "⚠️  Deleting buckets will permanently destroy all state history."
+echo ""
+read -p "Type 'DELETE BUCKETS' to destroy buckets (or press Enter to retain): " bucket_confirm
+
+if [ "$bucket_confirm" = "DELETE BUCKETS" ]; then
+  DESTROY_BUCKETS=true
+  echo "✓ Buckets will be destroyed"
+else
+  DESTROY_BUCKETS=false
+  echo "✓ Buckets will be retained"
+fi
+
+echo ""
+echo "Starting destruction process..."
+echo ""
+
+# Handle case where only orphaned buckets exist (no stack)
+if [ "$STACK_EXISTS" = false ]; then
   echo "ℹ Stack '$STACK_NAME' does not exist"
 
-  if [ "$DESTROY_BUCKETS" = true ]; then
+  if [ "$DESTROY_BUCKETS" = true ] && [ "$ORPHANED_BUCKETS" = true ]; then
     echo ""
-    echo "Checking for orphaned buckets..."
+    echo "Cleaning up orphaned buckets..."
 
-    FOUND_BUCKETS=false
     if aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
       echo "  Found orphaned state bucket: $STATE_BUCKET"
-      FOUND_BUCKETS=true
+      delete_versioned_bucket "$STATE_BUCKET"
     fi
 
     if aws s3api head-bucket --bucket "$LOG_BUCKET" 2>/dev/null; then
       echo "  Found orphaned log bucket: $LOG_BUCKET"
-      FOUND_BUCKETS=true
+      delete_versioned_bucket "$LOG_BUCKET"
     fi
 
-    if [ "$FOUND_BUCKETS" = true ]; then
-      echo ""
-      delete_versioned_bucket "$STATE_BUCKET"
-      delete_versioned_bucket "$LOG_BUCKET"
-      echo ""
-      echo "✓ Orphaned buckets cleaned up"
-    else
-      echo "  No orphaned buckets found"
-    fi
+    echo ""
+    echo "=========================================="
+    echo "✓ DESTRUCTION COMPLETE"
+    echo "=========================================="
+    echo ""
+    echo "Orphaned buckets have been destroyed."
+  else
+    echo ""
+    echo "✓ Orphaned buckets retained"
   fi
 
-  echo ""
-  echo "✓ No resources to destroy"
   exit 0
 fi
 
