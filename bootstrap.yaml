@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'Terraform Foundation - Shared backend resources for OpenTofu state management'
+Description: 'Terraform Foundation - Shared backend resources for state management'
 
 Parameters:
   CloudTrailEnabled:
