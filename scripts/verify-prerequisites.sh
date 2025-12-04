@@ -224,9 +224,12 @@ check_jq() {
   if command -v jq &>/dev/null; then
     JQ_VERSION=$(jq --version)
     echo -e "${GREEN}✓${NC} jq is installed (Version: $JQ_VERSION)"
+    return 0
   else
-    echo -e "${YELLOW}⚠${NC} jq not found (recommended for scripts)"
+    echo -e "${RED}✗${NC} jq not found (required for bucket operations)"
     echo "  Install: brew install jq (macOS) or apt-get install jq (Linux)"
+    FAILURES+=("jq required")
+    return 1
   fi
 }
 

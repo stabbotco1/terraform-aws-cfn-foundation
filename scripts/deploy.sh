@@ -163,41 +163,214 @@ case "$OIDC_PROVIDER" in
     ;;
 esac
 
-# Detect bucket state
-echo ""
-echo "Step 4: Detecting orphaned resources..."
-
+# Define resource names
 STATE_BUCKET="terraform-state-${ACCOUNT_ID}-${REGION}"
 LOG_BUCKET="terraform-state-logs-${ACCOUNT_ID}-${REGION}"
 STACK_NAME="terraform-shared-infrastructure"
 
-detect_bucket_state() {
-  local bucket=$1
-  if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
-    echo "none"
-  elif aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
-       --query "StackResources[?PhysicalResourceId=='$bucket'].PhysicalResourceId" \
-       --output text 2>/dev/null | grep -q "$bucket"; then
-    echo "in-stack"
+# Check for existing stack first
+echo ""
+echo "Step 4: Checking for existing CloudFormation stack..."
+
+if aws cloudformation describe-stacks --stack-name "$STACK_NAME" &>/dev/null; then
+  STACK_STATUS=$(aws cloudformation describe-stacks \
+    --stack-name "$STACK_NAME" \
+    --query 'Stacks[0].StackStatus' \
+    --output text)
+
+  echo "ℹ Stack '$STACK_NAME' exists with status: $STACK_STATUS"
+
+  case "$STACK_STATUS" in
+    ROLLBACK_COMPLETE)
+      echo "⚠ Stack is in ROLLBACK_COMPLETE state (failed initial creation)"
+      echo "  Must delete and recreate"
+
+      # Function to safely delete a versioned S3 bucket
+      delete_versioned_bucket() {
+        local bucket=$1
+
+        if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+          return 0  # Bucket doesn't exist, nothing to do
+        fi
+
+        echo "  Cleaning up bucket: $bucket"
+
+        # Delete all object versions
+        aws s3api list-object-versions \
+          --bucket "$bucket" \
+          --output json \
+          --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+        jq -r '.Objects[]? | @json' | \
+        while IFS= read -r obj; do
+          KEY=$(echo "$obj" | jq -r '.Key')
+          VERSION_ID=$(echo "$obj" | jq -r '.VersionId')
+          aws s3api delete-object --bucket "$bucket" --key "$KEY" --version-id "$VERSION_ID" &>/dev/null || true
+        done
+
+        # Delete all delete markers
+        aws s3api list-object-versions \
+          --bucket "$bucket" \
+          --output json \
+          --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+        jq -r '.Objects[]? | @json' | \
+        while IFS= read -r obj; do
+          KEY=$(echo "$obj" | jq -r '.Key')
+          VERSION_ID=$(echo "$obj" | jq -r '.VersionId')
+          aws s3api delete-object --bucket "$bucket" --key "$KEY" --version-id "$VERSION_ID" &>/dev/null || true
+        done
+
+        # Final cleanup and delete
+        aws s3 rm "s3://$bucket" --recursive &>/dev/null || true
+        aws s3api delete-bucket --bucket "$bucket" 2>/dev/null || true
+      }
+
+      # Clean up orphaned buckets from failed creation
+      delete_versioned_bucket "$STATE_BUCKET"
+      delete_versioned_bucket "$LOG_BUCKET"
+
+      # Check and clean up OIDC provider if it exists
+      OIDC_PROVIDER_ARN=$(aws iam list-open-id-connect-providers \
+        --query "OpenIDConnectProviderList[?contains(Arn, '${OIDC_URL#https://}')].Arn" \
+        --output text 2>/dev/null || echo "")
+
+      if [ -n "$OIDC_PROVIDER_ARN" ]; then
+        echo "  Cleaning up orphaned OIDC provider: $OIDC_PROVIDER_ARN"
+        aws iam delete-open-id-connect-provider --open-id-connect-provider-arn "$OIDC_PROVIDER_ARN" 2>/dev/null || true
+      fi
+
+      # Disable termination protection if enabled
+      aws cloudformation update-termination-protection \
+        --stack-name "$STACK_NAME" \
+        --no-enable-termination-protection &>/dev/null || true
+
+      echo "  Deleting failed stack..."
+      aws cloudformation delete-stack --stack-name "$STACK_NAME"
+      echo "  Waiting for stack deletion..."
+      aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
+      echo "✓ Failed stack and orphaned resources cleaned up - will create new stack"
+      ACTION="create"
+      ;;
+    UPDATE_ROLLBACK_COMPLETE)
+      echo "ℹ Stack is in UPDATE_ROLLBACK_COMPLETE state (failed update)"
+      echo "  Stack will be updated"
+      ACTION="update"
+      ;;
+    CREATE_COMPLETE|UPDATE_COMPLETE|IMPORT_COMPLETE)
+      echo "ℹ Stack is healthy - updating existing stack"
+      ACTION="update"
+      ;;
+    CREATE_IN_PROGRESS|UPDATE_IN_PROGRESS|DELETE_IN_PROGRESS|IMPORT_IN_PROGRESS)
+      echo "✗ Stack operation in progress: $STACK_STATUS"
+      echo "  Please wait for the current operation to complete and try again"
+      exit 1
+      ;;
+    DELETE_FAILED)
+      echo "⚠ Stack is in DELETE_FAILED state"
+      echo "  Manual intervention may be required"
+      echo "  Check the CloudFormation console for details on resources that failed to delete"
+      exit 1
+      ;;
+    *)
+      echo "⚠ Unexpected stack status: $STACK_STATUS"
+      echo "  Attempting to proceed with update"
+      ACTION="update"
+      ;;
+  esac
+else
+  echo "ℹ Stack '$STACK_NAME' does not exist"
+
+  # Check for orphaned buckets (stack doesn't exist but buckets might)
+  detect_bucket_state() {
+    local bucket=$1
+    if aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+      echo "orphaned"
+    else
+      echo "none"
+    fi
+  }
+
+  STATE_BUCKET_STATE=$(detect_bucket_state "$STATE_BUCKET")
+  LOG_BUCKET_STATE=$(detect_bucket_state "$LOG_BUCKET")
+
+  if [ "$STATE_BUCKET_STATE" = "orphaned" ] || [ "$LOG_BUCKET_STATE" = "orphaned" ]; then
+    echo "ℹ Orphaned S3 buckets detected from previous deployment"
+    echo "  State bucket: $STATE_BUCKET_STATE"
+    echo "  Log bucket: $LOG_BUCKET_STATE"
+    echo ""
+    echo "  Options:"
+    echo "    1. Import buckets into new stack (preserves existing state)"
+    echo "    2. Delete buckets and create fresh (destroys all state)"
+    echo ""
+    read -p "Import buckets? (y/N): " IMPORT_CHOICE
+
+    if [[ "$IMPORT_CHOICE" =~ ^[Yy]$ ]]; then
+      echo "  Will import orphaned buckets into stack"
+      ACTION="import"
+    else
+      echo "  Will delete orphaned buckets and create fresh"
+
+      # Function to safely delete a versioned S3 bucket
+      delete_versioned_bucket() {
+        local bucket=$1
+
+        if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+          return 0  # Bucket doesn't exist, nothing to do
+        fi
+
+        echo "  Deleting bucket: $bucket"
+
+        # Delete all object versions
+        aws s3api list-object-versions \
+          --bucket "$bucket" \
+          --output json \
+          --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+        jq -r '.Objects[]? | @json' | \
+        while IFS= read -r obj; do
+          KEY=$(echo "$obj" | jq -r '.Key')
+          VERSION_ID=$(echo "$obj" | jq -r '.VersionId')
+          aws s3api delete-object --bucket "$bucket" --key "$KEY" --version-id "$VERSION_ID" &>/dev/null || true
+        done
+
+        # Delete all delete markers
+        aws s3api list-object-versions \
+          --bucket "$bucket" \
+          --output json \
+          --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+        jq -r '.Objects[]? | @json' | \
+        while IFS= read -r obj; do
+          KEY=$(echo "$obj" | jq -r '.Key')
+          VERSION_ID=$(echo "$obj" | jq -r '.VersionId')
+          aws s3api delete-object --bucket "$bucket" --key "$KEY" --version-id "$VERSION_ID" &>/dev/null || true
+        done
+
+        # Final cleanup and delete
+        aws s3 rm "s3://$bucket" --recursive &>/dev/null || true
+        aws s3api delete-bucket --bucket "$bucket" 2>/dev/null || true
+      }
+
+      delete_versioned_bucket "$STATE_BUCKET"
+      delete_versioned_bucket "$LOG_BUCKET"
+      echo "✓ Orphaned buckets cleaned up"
+      ACTION="create"
+    fi
   else
-    echo "orphaned"
+    ACTION="create"
   fi
-}
+fi
 
-STATE_BUCKET_STATE=$(detect_bucket_state "$STATE_BUCKET")
-LOG_BUCKET_STATE=$(detect_bucket_state "$LOG_BUCKET")
+# Deploy CloudFormation stack
+echo ""
+echo "Step 5: Deploying CloudFormation stack..."
 
-if [ "$STATE_BUCKET_STATE" = "orphaned" ] || [ "$LOG_BUCKET_STATE" = "orphaned" ]; then
-  echo "ℹ Orphaned S3 buckets detected from previous deployment"
-  echo "  State bucket: $STATE_BUCKET_STATE"
-  echo "  Log bucket: $LOG_BUCKET_STATE"
-  echo "  Importing buckets into stack..."
-  
-  # Create resources-to-import.json
+if [ "$ACTION" = "import" ]; then
+  # Import orphaned buckets into a new stack
+  echo "Creating stack with bucket import..."
+
+  # Build import resources JSON
   cat > /tmp/resources-to-import.json <<EOF
 [
 EOF
-  
+
   FIRST=true
   if [ "$STATE_BUCKET_STATE" = "orphaned" ]; then
     cat >> /tmp/resources-to-import.json <<EOF
@@ -211,7 +384,7 @@ EOF
 EOF
     FIRST=false
   fi
-  
+
   if [ "$LOG_BUCKET_STATE" = "orphaned" ]; then
     [ "$FIRST" = false ] && echo "," >> /tmp/resources-to-import.json
     cat >> /tmp/resources-to-import.json <<EOF
@@ -224,16 +397,19 @@ EOF
   }
 EOF
   fi
-  
+
   cat >> /tmp/resources-to-import.json <<EOF
 
 ]
 EOF
-  
+
   # Create import changeset
+  echo "  Creating import changeset..."
+  CHANGESET_NAME="import-buckets-$(date +%s)"
+
   aws cloudformation create-change-set \
     --stack-name "$STACK_NAME" \
-    --change-set-name "import-buckets-$(date +%s)" \
+    --change-set-name "$CHANGESET_NAME" \
     --change-set-type IMPORT \
     --resources-to-import file:///tmp/resources-to-import.json \
     --template-body file://bootstrap.yaml \
@@ -250,99 +426,49 @@ EOF
       ParameterKey=OidcProvider,ParameterValue="$OIDC_PROVIDER" \
       ParameterKey=OidcUrl,ParameterValue="$OIDC_URL" \
       ParameterKey=OidcThumbprints,ParameterValue=\"$OIDC_THUMBPRINTS\" \
-      ParameterKey=OidcAudience,ParameterValue="$OIDC_AUDIENCE"
-  
-  # Wait for changeset creation
+      ParameterKey=OidcAudience,ParameterValue="$OIDC_AUDIENCE" \
+    --tags \
+      Key=Project,Value="$PROJECT" \
+      Key=Repository,Value="$REPOSITORY" \
+      Key=Environment,Value="$ENVIRONMENT" \
+      Key=Owner,Value="$OWNER" \
+      Key=AccountId,Value="$ACCOUNT_ID" \
+      Key=Region,Value="$REGION" \
+      Key=DeployedBy,Value="$DEPLOYED_BY" \
+      Key=ManagedBy,Value="$MANAGED_BY" \
+      Key=DeploymentID,Value="$DEPLOYMENT_ID" 2>&1 || {
+    echo "✗ Failed to create import changeset"
+    echo "  This can happen if bucket configurations don't match the template"
+    rm -f /tmp/resources-to-import.json
+    exit 1
+  }
+
+  # Wait for changeset to be created
+  echo "  Waiting for changeset creation..."
   sleep 5
-  
-  # Execute changeset
-  CHANGESET_NAME=$(aws cloudformation list-change-sets \
-    --stack-name "$STACK_NAME" \
-    --query 'Summaries[0].ChangeSetName' \
-    --output text)
-  
+
+  # Execute the changeset
+  echo "  Executing changeset..."
   aws cloudformation execute-change-set \
     --stack-name "$STACK_NAME" \
     --change-set-name "$CHANGESET_NAME"
-  
+
   echo "  Waiting for import to complete..."
-  aws cloudformation wait stack-import-complete --stack-name "$STACK_NAME"
-  
-  rm /tmp/resources-to-import.json
-  echo "✓ Buckets imported successfully"
-fi
+  aws cloudformation wait stack-import-complete --stack-name "$STACK_NAME" 2>&1 || {
+    echo "✗ Import failed"
+    rm -f /tmp/resources-to-import.json
+    exit 1
+  }
 
-# Check for existing stack
-echo ""
-echo "Step 5: Checking for existing CloudFormation stack..."
-
-if aws cloudformation describe-stacks --stack-name "$STACK_NAME" &>/dev/null; then
-  STACK_STATUS=$(aws cloudformation describe-stacks \
+  # Enable termination protection
+  aws cloudformation update-termination-protection \
     --stack-name "$STACK_NAME" \
-    --query 'Stacks[0].StackStatus' \
-    --output text)
-  
-  echo "ℹ Stack '$STACK_NAME' exists with status: $STACK_STATUS"
-  
-  case "$STACK_STATUS" in
-    ROLLBACK_COMPLETE)
-      echo "⚠ Stack is in ROLLBACK_COMPLETE state (failed initial creation)"
-      echo "  Must delete and recreate"
-      
-      # Check for orphaned buckets from failed creation
-      if aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
-        echo "  Cleaning up orphaned state bucket: $STATE_BUCKET"
-        aws s3 rm "s3://$STATE_BUCKET" --recursive 2>/dev/null || true
-        aws s3api delete-bucket --bucket "$STATE_BUCKET" 2>/dev/null || true
-      fi
-      
-      if aws s3api head-bucket --bucket "$LOG_BUCKET" 2>/dev/null; then
-        echo "  Cleaning up orphaned log bucket: $LOG_BUCKET"
-        aws s3 rm "s3://$LOG_BUCKET" --recursive 2>/dev/null || true
-        aws s3api delete-bucket --bucket "$LOG_BUCKET" 2>/dev/null || true
-      fi
-      
-      # Disable termination protection if enabled
-      aws cloudformation update-termination-protection \
-        --stack-name "$STACK_NAME" \
-        --no-enable-termination-protection &>/dev/null || true
-      
-      echo "  Deleting failed stack..."
-      aws cloudformation delete-stack --stack-name "$STACK_NAME"
-      aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
-      echo "✓ Failed stack deleted - will create new stack"
-      ACTION="create"
-      ;;
-    UPDATE_ROLLBACK_COMPLETE)
-      echo "ℹ Stack is in UPDATE_ROLLBACK_COMPLETE state (failed update)"
-      echo "  Stack will be updated"
-      ACTION="update"
-      ;;
-    CREATE_COMPLETE|UPDATE_COMPLETE|IMPORT_COMPLETE)
-      echo "ℹ Stack is healthy - updating existing stack"
-      ACTION="update"
-      ;;
-    *_IN_PROGRESS)
-      echo "✗ Stack operation in progress: $STACK_STATUS"
-      echo "  Wait for current operation to complete"
-      exit 1
-      ;;
-    *)
-      echo "⚠ Unexpected stack status: $STACK_STATUS"
-      echo "  Attempting to proceed with update"
-      ACTION="update"
-      ;;
-  esac
-else
-  echo "ℹ Stack '$STACK_NAME' does not exist - will create"
-  ACTION="create"
-fi
+    --enable-termination-protection &>/dev/null || true
 
-# Deploy CloudFormation stack
-echo ""
-echo "Step 6: Deploying CloudFormation stack..."
+  rm -f /tmp/resources-to-import.json
+  echo "✓ Stack created with imported buckets"
 
-if [ "$ACTION" = "create" ]; then
+elif [ "$ACTION" = "create" ]; then
   aws cloudformation create-stack \
     --stack-name "$STACK_NAME" \
     --template-body file://bootstrap.yaml \
@@ -409,20 +535,35 @@ else
   echo "✓ CloudFormation stack update initiated"
   echo "  Waiting for stack update to complete..."
 
-  aws cloudformation wait stack-update-complete \
-    --stack-name "$STACK_NAME" 2>/dev/null || {
-    # Check if no updates were needed
-    if aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
-       --query 'Stacks[0].StackStatus' --output text | grep -q "UPDATE_COMPLETE"; then
-      echo "  No changes detected"
-    else
-      exit 1
-    fi
-  }
+  # Try to wait for update completion
+  if aws cloudformation wait stack-update-complete --stack-name "$STACK_NAME" 2>&1; then
+    echo "✓ Stack update completed successfully"
+  else
+    # Check what actually happened
+    FINAL_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+      --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "UNKNOWN")
+
+    case "$FINAL_STATUS" in
+      UPDATE_COMPLETE)
+        # Wait command can fail even if update completed - likely due to "No updates"
+        echo "✓ Stack update completed (no changes detected)"
+        ;;
+      *COMPLETE)
+        # Any other complete status (shouldn't happen but handle gracefully)
+        echo "✓ Stack is in a complete state: $FINAL_STATUS"
+        ;;
+      *)
+        # Actual failure
+        echo "✗ Stack update failed with status: $FINAL_STATUS"
+        echo "  Check CloudFormation console for details"
+        exit 1
+        ;;
+    esac
+  fi
 fi
 
 echo ""
-echo "Step 7: Verifying deployment..."
+echo "Step 6: Verifying deployment..."
 
 # Get stack outputs
 BUCKET=$(aws cloudformation describe-stacks \

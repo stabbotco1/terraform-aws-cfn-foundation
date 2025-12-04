@@ -53,69 +53,111 @@ echo ""
 echo "Starting destruction process..."
 echo ""
 
+# Function to safely delete a versioned S3 bucket
+delete_versioned_bucket() {
+  local bucket=$1
+
+  if ! aws s3api head-bucket --bucket "$bucket" 2>/dev/null; then
+    return 0  # Bucket doesn't exist, nothing to do
+  fi
+
+  echo "  Emptying bucket: $bucket"
+
+  # Delete all object versions using jq
+  aws s3api list-object-versions \
+    --bucket "$bucket" \
+    --output json \
+    --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+  jq -r '.Objects[]? | @json' | \
+  while IFS= read -r obj; do
+    KEY=$(echo "$obj" | jq -r '.Key')
+    VERSION_ID=$(echo "$obj" | jq -r '.VersionId')
+    aws s3api delete-object --bucket "$bucket" --key "$KEY" --version-id "$VERSION_ID" &>/dev/null || true
+  done
+
+  # Delete all delete markers
+  aws s3api list-object-versions \
+    --bucket "$bucket" \
+    --output json \
+    --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+  jq -r '.Objects[]? | @json' | \
+  while IFS= read -r obj; do
+    KEY=$(echo "$obj" | jq -r '.Key')
+    VERSION_ID=$(echo "$obj" | jq -r '.VersionId')
+    aws s3api delete-object --bucket "$bucket" --key "$KEY" --version-id "$VERSION_ID" &>/dev/null || true
+  done
+
+  # Final cleanup and delete
+  aws s3 rm "s3://$bucket" --recursive &>/dev/null || true
+  aws s3api delete-bucket --bucket "$bucket" 2>/dev/null && echo "  ✓ Deleted bucket: $bucket" || echo "  ⚠ Failed to delete bucket: $bucket"
+}
+
+# Get AWS account info
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REGION=${AWS_REGION:-$(aws configure get region || echo "us-east-1")}
+STATE_BUCKET="terraform-state-${ACCOUNT_ID}-${REGION}"
+LOG_BUCKET="terraform-state-logs-${ACCOUNT_ID}-${REGION}"
+
 # Check if stack exists
 if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" &>/dev/null; then
-  echo "✗ Stack '$STACK_NAME' not found"
-  
+  echo "ℹ Stack '$STACK_NAME' does not exist"
+
   if [ "$DESTROY_BUCKETS" = true ]; then
+    echo ""
     echo "Checking for orphaned buckets..."
-    
-    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-    REGION=$(aws configure get region || echo "us-east-1")
-    STATE_BUCKET="terraform-state-${ACCOUNT_ID}-${REGION}"
-    LOG_BUCKET="terraform-state-logs-${ACCOUNT_ID}-${REGION}"
-    
-    if aws s3 ls "s3://$STATE_BUCKET" &>/dev/null; then
-      echo "Found orphaned state bucket: $STATE_BUCKET"
-      echo "Emptying and deleting..."
-      
-      # Delete all versions
-      aws s3api list-object-versions \
-        --bucket "$STATE_BUCKET" \
-        --output json \
-        --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
-      jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
-      xargs -I {} -P 10 aws s3api delete-object --bucket "$STATE_BUCKET" {} &>/dev/null || true
-      
-      # Delete all delete markers
-      aws s3api list-object-versions \
-        --bucket "$STATE_BUCKET" \
-        --output json \
-        --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
-      jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
-      xargs -I {} -P 10 aws s3api delete-object --bucket "$STATE_BUCKET" {} &>/dev/null || true
-      
-      aws s3 rm "s3://$STATE_BUCKET" --recursive &>/dev/null || true
-      aws s3api delete-bucket --bucket "$STATE_BUCKET"
-      echo "✓ Deleted $STATE_BUCKET"
+
+    FOUND_BUCKETS=false
+    if aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+      echo "  Found orphaned state bucket: $STATE_BUCKET"
+      FOUND_BUCKETS=true
     fi
-    
-    if aws s3 ls "s3://$LOG_BUCKET" &>/dev/null; then
-      echo "Found orphaned log bucket: $LOG_BUCKET"
-      echo "Emptying and deleting..."
-      
-      aws s3api list-object-versions \
-        --bucket "$LOG_BUCKET" \
-        --output json \
-        --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
-      jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
-      xargs -I {} -P 10 aws s3api delete-object --bucket "$LOG_BUCKET" {} &>/dev/null || true
-      
-      aws s3api list-object-versions \
-        --bucket "$LOG_BUCKET" \
-        --output json \
-        --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
-      jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
-      xargs -I {} -P 10 aws s3api delete-object --bucket "$LOG_BUCKET" {} &>/dev/null || true
-      
-      aws s3 rm "s3://$LOG_BUCKET" --recursive &>/dev/null || true
-      aws s3api delete-bucket --bucket "$LOG_BUCKET"
-      echo "✓ Deleted $LOG_BUCKET"
+
+    if aws s3api head-bucket --bucket "$LOG_BUCKET" 2>/dev/null; then
+      echo "  Found orphaned log bucket: $LOG_BUCKET"
+      FOUND_BUCKETS=true
+    fi
+
+    if [ "$FOUND_BUCKETS" = true ]; then
+      echo ""
+      delete_versioned_bucket "$STATE_BUCKET"
+      delete_versioned_bucket "$LOG_BUCKET"
+      echo ""
+      echo "✓ Orphaned buckets cleaned up"
+    else
+      echo "  No orphaned buckets found"
     fi
   fi
-  
+
+  echo ""
+  echo "✓ No resources to destroy"
   exit 0
 fi
+
+# Check stack status
+STACK_STATUS=$(aws cloudformation describe-stacks \
+  --stack-name "$STACK_NAME" \
+  --query 'Stacks[0].StackStatus' \
+  --output text 2>/dev/null || echo "UNKNOWN")
+
+case "$STACK_STATUS" in
+  *_IN_PROGRESS)
+    echo "✗ Stack operation in progress: $STACK_STATUS"
+    echo "  Please wait for the current operation to complete and try again"
+    exit 1
+    ;;
+  ROLLBACK_COMPLETE)
+    echo "ℹ Stack is in ROLLBACK_COMPLETE state"
+    echo "  This is a failed stack that can be deleted directly"
+    ;;
+  DELETE_FAILED)
+    echo "⚠ Stack is in DELETE_FAILED state"
+    echo "  Will attempt to complete deletion"
+    echo "  Note: Some resources may require manual cleanup"
+    ;;
+  *)
+    echo "ℹ Stack status: $STACK_STATUS"
+    ;;
+esac
 
 # Get stack resources
 echo "Step 1: Retrieving stack resources..."
@@ -152,92 +194,81 @@ fi
 
 # Step 4: Empty S3 buckets if requested
 if [ "$DESTROY_BUCKETS" = true ]; then
+  echo "Step 4: Emptying S3 buckets..."
+
   if [ -n "$STATE_BUCKET" ]; then
-    echo "Step 4: Emptying S3 state bucket..."
-    
-    # Delete all object versions
-    echo "  Deleting all object versions..."
-    aws s3api list-object-versions \
-      --bucket "$STATE_BUCKET" \
-      --output json \
-      --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
-    jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
-    xargs -I {} -P 10 aws s3api delete-object --bucket "$STATE_BUCKET" {} &>/dev/null || true
-    
-    # Delete all delete markers
-    echo "  Deleting all delete markers..."
-    aws s3api list-object-versions \
-      --bucket "$STATE_BUCKET" \
-      --output json \
-      --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
-    jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
-    xargs -I {} -P 10 aws s3api delete-object --bucket "$STATE_BUCKET" {} &>/dev/null || true
-    
-    # Final cleanup
-    aws s3 rm "s3://$STATE_BUCKET" --recursive &>/dev/null || true
-    
-    echo "✓ State bucket emptied"
-    echo ""
+    delete_versioned_bucket "$STATE_BUCKET"
   fi
-  
+
   if [ -n "$LOG_BUCKET" ]; then
-    echo "Step 5: Emptying S3 log bucket..."
-    
-    # Delete all object versions
-    aws s3api list-object-versions \
-      --bucket "$LOG_BUCKET" \
-      --output json \
-      --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
-    jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
-    xargs -I {} -P 10 aws s3api delete-object --bucket "$LOG_BUCKET" {} &>/dev/null || true
-    
-    # Delete all delete markers
-    aws s3api list-object-versions \
-      --bucket "$LOG_BUCKET" \
-      --output json \
-      --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
-    jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
-    xargs -I {} -P 10 aws s3api delete-object --bucket "$LOG_BUCKET" {} &>/dev/null || true
-    
-    # Final cleanup
-    aws s3 rm "s3://$LOG_BUCKET" --recursive &>/dev/null || true
-    
-    echo "✓ Log bucket emptied"
-    echo ""
+    delete_versioned_bucket "$LOG_BUCKET"
   fi
+
+  echo "✓ Buckets emptied"
+  echo ""
 fi
 
-# Step 6: Delete CloudFormation stack
-echo "Step 6: Deleting CloudFormation stack..."
+# Step 5: Delete CloudFormation stack
+echo "Step 5: Deleting CloudFormation stack..."
 aws cloudformation delete-stack --stack-name "$STACK_NAME"
 echo "  Waiting for stack deletion to complete..."
-aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" 2>/dev/null || {
-  echo "  Stack deletion encountered an issue, checking status..."
-  STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DELETED")
-  
-  if [ "$STACK_STATUS" = "DELETE_FAILED" ]; then
-    echo "⚠ Stack deletion failed, checking for remaining resources..."
-  else
-    echo "✓ Stack deleted"
-  fi
-}
+
+if aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" 2>&1; then
+  echo "✓ Stack deleted successfully"
+else
+  # Check what actually happened
+  FINAL_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+    --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DELETED")
+
+  case "$FINAL_STATUS" in
+    DELETED)
+      echo "✓ Stack deleted successfully"
+      ;;
+    DELETE_FAILED)
+      echo "⚠ Stack deletion failed with status: DELETE_FAILED"
+      echo ""
+      echo "  Failed resources:"
+      aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" \
+        --query 'StackResources[?ResourceStatus==`DELETE_FAILED`].[LogicalResourceId,ResourceType,ResourceStatusReason]' \
+        --output table 2>/dev/null || true
+      echo ""
+      echo "  You may need to manually delete these resources and retry"
+      exit 1
+      ;;
+    *)
+      echo "⚠ Unexpected status: $FINAL_STATUS"
+      exit 1
+      ;;
+  esac
+fi
 echo ""
 
-# Step 7: Clean up remaining S3 buckets if requested
+# Step 6: Clean up remaining S3 buckets if requested (only if not managed by stack)
 if [ "$DESTROY_BUCKETS" = true ]; then
-  echo "Step 7: Cleaning up remaining S3 buckets..."
-  
-  if [ -n "$STATE_BUCKET" ] && aws s3 ls "s3://$STATE_BUCKET" &>/dev/null; then
-    echo "  Deleting state bucket..."
-    aws s3api delete-bucket --bucket "$STATE_BUCKET" 2>/dev/null || true
-    echo "  ✓ State bucket deleted"
+  echo "Step 6: Verifying S3 bucket cleanup..."
+
+  CLEANED_BUCKETS=false
+
+  if [ -n "$STATE_BUCKET" ] && aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+    echo "  State bucket still exists (retained by DeletionPolicy), deleting..."
+    aws s3api delete-bucket --bucket "$STATE_BUCKET" 2>/dev/null && {
+      echo "  ✓ State bucket deleted"
+      CLEANED_BUCKETS=true
+    } || echo "  ⚠ Failed to delete state bucket (may already be deleted)"
   fi
-  
-  if [ -n "$LOG_BUCKET" ] && aws s3 ls "s3://$LOG_BUCKET" &>/dev/null; then
-    echo "  Deleting log bucket..."
-    aws s3api delete-bucket --bucket "$LOG_BUCKET" 2>/dev/null || true
-    echo "  ✓ Log bucket deleted"
+
+  if [ -n "$LOG_BUCKET" ] && aws s3api head-bucket --bucket "$LOG_BUCKET" 2>/dev/null; then
+    echo "  Log bucket still exists (retained by DeletionPolicy), deleting..."
+    aws s3api delete-bucket --bucket "$LOG_BUCKET" 2>/dev/null && {
+      echo "  ✓ Log bucket deleted"
+      CLEANED_BUCKETS=true
+    } || echo "  ⚠ Failed to delete log bucket (may already be deleted)"
   fi
+
+  if [ "$CLEANED_BUCKETS" = false ]; then
+    echo "  All buckets already cleaned up"
+  fi
+
   echo ""
 fi
 
