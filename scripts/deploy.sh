@@ -289,6 +289,19 @@ if aws cloudformation describe-stacks --stack-name "$STACK_NAME" &>/dev/null; th
       echo "⚠ Stack is in ROLLBACK_COMPLETE state (failed initial creation)"
       echo "  Must delete and recreate"
       
+      # Check for orphaned buckets from failed creation
+      if aws s3api head-bucket --bucket "$STATE_BUCKET" 2>/dev/null; then
+        echo "  Cleaning up orphaned state bucket: $STATE_BUCKET"
+        aws s3 rm "s3://$STATE_BUCKET" --recursive 2>/dev/null || true
+        aws s3api delete-bucket --bucket "$STATE_BUCKET" 2>/dev/null || true
+      fi
+      
+      if aws s3api head-bucket --bucket "$LOG_BUCKET" 2>/dev/null; then
+        echo "  Cleaning up orphaned log bucket: $LOG_BUCKET"
+        aws s3 rm "s3://$LOG_BUCKET" --recursive 2>/dev/null || true
+        aws s3api delete-bucket --bucket "$LOG_BUCKET" 2>/dev/null || true
+      fi
+      
       # Disable termination protection if enabled
       aws cloudformation update-termination-protection \
         --stack-name "$STACK_NAME" \
