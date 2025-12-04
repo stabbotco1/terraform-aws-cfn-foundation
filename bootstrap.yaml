@@ -318,7 +318,7 @@ Resources:
     UpdateReplacePolicy: Delete
 
   # OIDC Provider (auto-detected from git remote: GitHub, GitLab, or Bitbucket)
-  OidcProvider:
+  OidcProviderResource:
     Type: AWS::IAM::OIDCProvider
     Properties:
       Url: !Ref OidcUrl
@@ -381,7 +381,7 @@ Resources:
     Properties:
       Name: /terraform/foundation/oidc-provider
       Type: String
-      Value: !Ref OidcProvider
+      Value: !Ref OidcProviderResource
       Description: 'OIDC provider ARN for CI/CD authentication'
       Tags:
         Project: !Ref Project
@@ -405,7 +405,7 @@ Outputs:
 
   OidcProviderArn:
     Description: 'OIDC provider ARN for CI/CD authentication'
-    Value: !Ref OidcProvider
+    Value: !Ref OidcProviderResource
     Export:
       Name: !Sub '${AWS::StackName}-OidcProvider'
 
