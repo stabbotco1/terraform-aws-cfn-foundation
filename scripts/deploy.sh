@@ -249,7 +249,7 @@ EOF
       ParameterKey=DeploymentID,ParameterValue="$DEPLOYMENT_ID" \
       ParameterKey=OidcProvider,ParameterValue="$OIDC_PROVIDER" \
       ParameterKey=OidcUrl,ParameterValue="$OIDC_URL" \
-      ParameterKey=OidcThumbprints,ParameterValue="$OIDC_THUMBPRINTS" \
+      ParameterKey=OidcThumbprints,ParameterValue=\"$OIDC_THUMBPRINTS\" \
       ParameterKey=OidcAudience,ParameterValue="$OIDC_AUDIENCE"
   
   # Wait for changeset creation
@@ -345,7 +345,7 @@ if [ "$ACTION" = "create" ]; then
       ParameterKey=DeploymentID,ParameterValue="$DEPLOYMENT_ID" \
       ParameterKey=OidcProvider,ParameterValue="$OIDC_PROVIDER" \
       ParameterKey=OidcUrl,ParameterValue="$OIDC_URL" \
-      ParameterKey=OidcThumbprints,ParameterValue="$OIDC_THUMBPRINTS" \
+      ParameterKey=OidcThumbprints,ParameterValue=\"$OIDC_THUMBPRINTS\" \
       ParameterKey=OidcAudience,ParameterValue="$OIDC_AUDIENCE" \
     --enable-termination-protection \
     --tags \
@@ -380,7 +380,7 @@ else
       ParameterKey=DeploymentID,ParameterValue="$DEPLOYMENT_ID" \
       ParameterKey=OidcProvider,ParameterValue="$OIDC_PROVIDER" \
       ParameterKey=OidcUrl,ParameterValue="$OIDC_URL" \
-      ParameterKey=OidcThumbprints,ParameterValue="$OIDC_THUMBPRINTS" \
+      ParameterKey=OidcThumbprints,ParameterValue=\"$OIDC_THUMBPRINTS\" \
       ParameterKey=OidcAudience,ParameterValue="$OIDC_AUDIENCE" \
     --tags \
       Key=Project,Value="$PROJECT" \
