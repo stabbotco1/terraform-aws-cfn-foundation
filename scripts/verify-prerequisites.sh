@@ -252,9 +252,8 @@ check_required_files
 # Report results
 echo ""
 if [ ${#FAILURES[@]} -eq 0 ]; then
-  echo -e "${GREEN}✓ All critical prerequisites satisfied${NC}"
+  echo -e "${GREEN}✓ All prerequisites satisfied${NC}"
   echo ""
-  echo "Ready to deploy CloudFormation foundation!"
   exit 0
 else
   echo -e "${RED}✗ Prerequisites check failed:${NC}"
