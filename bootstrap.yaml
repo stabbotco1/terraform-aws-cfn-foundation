@@ -283,20 +283,6 @@ Resources:
         Owner: !Ref Owner
         ManagedBy: !Ref ManagedBy
 
-  SharedModulesRepoParameter:
-    Type: AWS::SSM::Parameter
-    Properties:
-      Name: /terraform/foundation/shared-modules-repository
-      Type: String
-      Value: 'terraform-aws-shared-modules'
-      Description: 'Shared modules repository name'
-      Tags:
-        Project: !Ref Project
-        Repository: !Ref Repository
-        Environment: !Ref Environment
-        Owner: !Ref Owner
-        ManagedBy: !Ref ManagedBy
-
 Outputs:
   TerraformStateBucket:
     Description: 'S3 bucket for Terraform state storage'
