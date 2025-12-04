@@ -3,19 +3,104 @@
 
 set -euo pipefail
 
+# Color codes
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+NC='\033[0m' # No Color
+
 FAILURES=()
 
 echo "Verifying prerequisites for CloudFormation foundation deployment..."
 echo ""
 
-check_aws_cli() {
-  if command -v aws &>/dev/null; then
-    echo "✓ AWS CLI is installed"
-    AWS_VERSION=$(aws --version 2>&1 | cut -d/ -f2 | cut -d' ' -f1)
-    echo "  Version: $AWS_VERSION"
+check_git_repo() {
+  if git rev-parse --git-dir &>/dev/null; then
+    echo -e "${GREEN}✓${NC} Inside git repository"
     return 0
   else
-    echo "✗ AWS CLI not found"
+    echo -e "${RED}✗${NC} Not in a git repository"
+    FAILURES+=("Not in git repository")
+    return 1
+  fi
+}
+
+check_git_uncommitted() {
+  if git diff-index --quiet HEAD -- 2>/dev/null; then
+    echo -e "${GREEN}✓${NC} No uncommitted changes"
+    return 0
+  else
+    echo -e "${RED}✗${NC} Uncommitted changes detected"
+    echo "  Commit or stash changes before deployment"
+    FAILURES+=("Uncommitted changes")
+    return 1
+  fi
+}
+
+check_git_untracked() {
+  if [ -z "$(git ls-files --others --exclude-standard)" ]; then
+    echo -e "${GREEN}✓${NC} No untracked files"
+    return 0
+  else
+    echo -e "${RED}✗${NC} Untracked files detected"
+    echo "  Add or ignore untracked files before deployment"
+    git ls-files --others --exclude-standard | sed 's/^/    /'
+    FAILURES+=("Untracked files")
+    return 1
+  fi
+}
+
+check_git_detached_head() {
+  if git symbolic-ref -q HEAD &>/dev/null; then
+    echo -e "${GREEN}✓${NC} Not in detached HEAD state"
+    return 0
+  else
+    echo -e "${RED}✗${NC} Detached HEAD state detected"
+    echo "  Checkout a branch before deployment"
+    FAILURES+=("Detached HEAD")
+    return 1
+  fi
+}
+
+check_git_upstream() {
+  if git rev-parse --abbrev-ref @{u} &>/dev/null; then
+    echo -e "${GREEN}✓${NC} Branch has upstream configured"
+    return 0
+  else
+    echo -e "${RED}✗${NC} No upstream branch configured"
+    echo "  Push branch and set upstream before deployment"
+    FAILURES+=("No upstream branch")
+    return 1
+  fi
+}
+
+check_git_unpushed() {
+  LOCAL=$(git rev-parse @ 2>/dev/null)
+  REMOTE=$(git rev-parse @{u} 2>/dev/null || echo "")
+  
+  if [ -z "$REMOTE" ]; then
+    # Already caught by check_git_upstream
+    return 0
+  fi
+  
+  if [ "$LOCAL" = "$REMOTE" ]; then
+    echo -e "${GREEN}✓${NC} No unpushed commits"
+    return 0
+  else
+    echo -e "${RED}✗${NC} Unpushed commits detected"
+    echo "  Push commits before deployment"
+    FAILURES+=("Unpushed commits")
+    return 1
+  fi
+}
+
+check_aws_cli() {
+  if command -v aws &>/dev/null; then
+    AWS_VERSION=$(aws --version 2>&1 | cut -d/ -f2 | cut -d' ' -f1)
+    echo -e "${GREEN}✓${NC} AWS CLI is installed (Version: $AWS_VERSION)"
+    return 0
+  else
+    echo -e "${RED}✗${NC} AWS CLI not found"
     FAILURES+=("AWS CLI not installed")
     return 1
   fi
@@ -25,12 +110,12 @@ check_aws_auth() {
   if aws sts get-caller-identity &>/dev/null; then
     CALLER_ARN=$(aws sts get-caller-identity --query 'Arn' --output text)
     ACCOUNT_ID=$(aws sts get-caller-identity --query 'Account' --output text)
-    echo "✓ AWS authentication valid"
+    echo -e "${GREEN}✓${NC} AWS authentication valid"
     echo "  Account: $ACCOUNT_ID"
     echo "  Identity: $CALLER_ARN"
     return 0
   else
-    echo "✗ AWS authentication failed"
+    echo -e "${RED}✗${NC} AWS authentication failed"
     echo "  Run: aws configure"
     FAILURES+=("AWS authentication")
     return 1
@@ -42,64 +127,63 @@ check_aws_permissions() {
   
   # Test CloudFormation permissions
   if aws cloudformation list-stacks --max-items 1 &>/dev/null; then
-    echo "✓ CloudFormation permissions valid"
+    echo -e "${GREEN}✓${NC} CloudFormation permissions valid"
   else
-    echo "✗ CloudFormation permissions insufficient"
+    echo -e "${RED}✗${NC} CloudFormation permissions insufficient"
     FAILURES+=("CloudFormation permissions")
   fi
   
   # Test IAM permissions
   if aws iam list-open-id-connect-providers &>/dev/null; then
-    echo "✓ IAM permissions valid"
+    echo -e "${GREEN}✓${NC} IAM permissions valid"
   else
-    echo "✗ IAM permissions insufficient"
+    echo -e "${RED}✗${NC} IAM permissions insufficient"
     FAILURES+=("IAM permissions")
   fi
   
   # Test S3 permissions
   if aws s3 ls &>/dev/null; then
-    echo "✓ S3 permissions valid"
+    echo -e "${GREEN}✓${NC} S3 permissions valid"
   else
-    echo "✗ S3 permissions insufficient"
+    echo -e "${RED}✗${NC} S3 permissions insufficient"
     FAILURES+=("S3 permissions")
   fi
   
   # Test DynamoDB permissions
   if aws dynamodb list-tables &>/dev/null; then
-    echo "✓ DynamoDB permissions valid"
+    echo -e "${GREEN}✓${NC} DynamoDB permissions valid"
   else
-    echo "✗ DynamoDB permissions insufficient"
+    echo -e "${RED}✗${NC} DynamoDB permissions insufficient"
     FAILURES+=("DynamoDB permissions")
   fi
   
   # Test SSM permissions
   if aws ssm describe-parameters --max-items 1 &>/dev/null; then
-    echo "✓ SSM Parameter Store permissions valid"
+    echo -e "${GREEN}✓${NC} SSM Parameter Store permissions valid"
   else
-    echo "✗ SSM Parameter Store permissions insufficient"
+    echo -e "${RED}✗${NC} SSM Parameter Store permissions insufficient"
     FAILURES+=("SSM permissions")
   fi
 }
 
 check_github_cli() {
   if command -v gh &>/dev/null; then
-    echo "✓ GitHub CLI is installed"
     GH_VERSION=$(gh --version | head -n1 | cut -d' ' -f3)
-    echo "  Version: $GH_VERSION"
+    echo -e "${GREEN}✓${NC} GitHub CLI is installed (Version: $GH_VERSION)"
     
     # Check authentication - now required
     if gh auth status &>/dev/null 2>&1; then
       GH_USER=$(gh api user --jq .login 2>/dev/null || echo "unknown")
-      echo "✓ GitHub CLI authenticated as: $GH_USER"
+      echo -e "${GREEN}✓${NC} GitHub CLI authenticated as: $GH_USER"
       return 0
     else
-      echo "✗ GitHub CLI not authenticated"
+      echo -e "${RED}✗${NC} GitHub CLI not authenticated"
       echo "  Run: gh auth login"
       FAILURES+=("GitHub authentication required")
       return 1
     fi
   else
-    echo "✗ GitHub CLI not found"
+    echo -e "${RED}✗${NC} GitHub CLI not found"
     echo "  Install: https://cli.github.com/"
     FAILURES+=("GitHub CLI required")
     return 1
@@ -108,9 +192,9 @@ check_github_cli() {
 
 check_required_files() {
   if [ -f "bootstrap.yaml" ]; then
-    echo "✓ CloudFormation template found: bootstrap.yaml"
+    echo -e "${GREEN}✓${NC} CloudFormation template found: bootstrap.yaml"
   else
-    echo "✗ Missing CloudFormation template: bootstrap.yaml"
+    echo -e "${RED}✗${NC} Missing CloudFormation template: bootstrap.yaml"
     FAILURES+=("Missing bootstrap.yaml")
   fi
 }
@@ -118,25 +202,30 @@ check_required_files() {
 check_bash_version() {
   BASH_VERSION=${BASH_VERSION:-"unknown"}
   if [[ "$BASH_VERSION" =~ ^[4-9] ]]; then
-    echo "✓ Bash version compatible: $BASH_VERSION"
+    echo -e "${GREEN}✓${NC} Bash version compatible: $BASH_VERSION"
   else
-    echo "⚠ Bash version may be incompatible: $BASH_VERSION"
+    echo -e "${YELLOW}⚠${NC} Bash version may be incompatible: $BASH_VERSION"
     echo "  Recommended: Bash 4+ (macOS: brew install bash)"
   fi
 }
 
 check_jq() {
   if command -v jq &>/dev/null; then
-    echo "✓ jq is installed"
     JQ_VERSION=$(jq --version)
-    echo "  Version: $JQ_VERSION"
+    echo -e "${GREEN}✓${NC} jq is installed (Version: $JQ_VERSION)"
   else
-    echo "⚠ jq not found (recommended for scripts)"
+    echo -e "${YELLOW}⚠${NC} jq not found (recommended for scripts)"
     echo "  Install: brew install jq (macOS) or apt-get install jq (Linux)"
   fi
 }
 
 # Run all checks
+check_git_repo
+check_git_uncommitted
+check_git_untracked
+check_git_detached_head
+check_git_upstream
+check_git_unpushed
 check_bash_version
 check_aws_cli
 check_aws_auth
@@ -148,12 +237,12 @@ check_required_files
 # Report results
 echo ""
 if [ ${#FAILURES[@]} -eq 0 ]; then
-  echo "✓ All critical prerequisites satisfied"
+  echo -e "${GREEN}✓ All critical prerequisites satisfied${NC}"
   echo ""
   echo "Ready to deploy CloudFormation foundation!"
   exit 0
 else
-  echo "✗ Prerequisites check failed:"
+  echo -e "${RED}✗ Prerequisites check failed:${NC}"
   for failure in "${FAILURES[@]}"; do
     echo "  - $failure"
   done

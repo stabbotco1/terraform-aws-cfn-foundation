@@ -1,296 +1,259 @@
 #!/bin/bash
-# scripts/destroy.sh - Destroy CloudFormation foundation (DANGEROUS)
-# Usage: ./scripts/destroy.sh [--auto-approve]
+# scripts/destroy.sh - Destroy CloudFormation foundation and all resources
 
 set -euo pipefail
 
+# Disable AWS CLI pager
+export AWS_PAGER=""
+
 STACK_NAME="terraform-shared-infrastructure"
-AUTO_APPROVE=false
 
-# Parse arguments
-if [ "${1:-}" = "--auto-approve" ]; then
-  AUTO_APPROVE=true
-fi
+# Verify prerequisites (includes git state checks)
+echo "Verifying prerequisites..."
+./scripts/verify-prerequisites.sh || exit 1
 
-echo "⚠️  DANGER: CloudFormation Foundation Destruction ⚠️"
 echo ""
-echo "This will destroy the foundation resources used by ALL Terraform projects:"
-echo "- S3 state bucket (and ALL state files)"
-echo "- DynamoDB lock table"
-echo "- GitHub OIDC provider (if created by this stack)"
-echo "- Parameter Store entries"
+echo "=========================================="
+echo "TERRAFORM FOUNDATION DESTRUCTION"
+echo "=========================================="
+echo ""
+echo "⚠️  WARNING: This will permanently delete:"
+echo "  - CloudFormation stack: $STACK_NAME"
+echo "  - DynamoDB lock table (always deleted)"
+echo "  - All SSM parameters"
+echo "  - S3 buckets (optional - see next prompt)"
+echo ""
+echo "This action is IRREVERSIBLE."
 echo ""
 
-# Detect environment
-if [ "${GITHUB_ACTIONS:-false}" = "true" ]; then
-  echo "✗ Destruction not allowed in GitHub Actions"
-  echo "  Run locally for safety"
-  exit 1
+# Require DESTROY confirmation
+read -p "Type 'DESTROY' to confirm: " confirmation
+
+if [ "$confirmation" != "DESTROY" ]; then
+  echo "Destruction cancelled"
+  exit 0
 fi
 
-# Require manual confirmation unless auto-approved
-if [ "$AUTO_APPROVE" = false ]; then
-  read -p "Type 'DESTROY' to confirm: " confirm
-  if [ "$confirm" != "DESTROY" ]; then
-    echo "Destruction cancelled"
-    exit 0
-  fi
-  echo ""
+# Ask about S3 buckets
+echo ""
+echo "S3 buckets contain Terraform state and are protected by default."
+echo "⚠️  Deleting buckets will permanently destroy all state history."
+echo ""
+read -p "Type 'DELETE BUCKETS' to destroy buckets (or press Enter to retain): " bucket_confirm
+
+if [ "$bucket_confirm" = "DELETE BUCKETS" ]; then
+  DESTROY_BUCKETS=true
+  echo "✓ Buckets will be destroyed"
+else
+  DESTROY_BUCKETS=false
+  echo "✓ Buckets will be retained"
 fi
 
-# Check if stack exists and get status
+echo ""
+echo "Starting destruction process..."
+echo ""
+
+# Check if stack exists
 if ! aws cloudformation describe-stacks --stack-name "$STACK_NAME" &>/dev/null; then
-  echo "ℹ Stack '$STACK_NAME' does not exist"
-  exit 0
-fi
-
-STACK_STATUS=$(aws cloudformation describe-stacks \
-  --stack-name "$STACK_NAME" \
-  --query 'Stacks[0].StackStatus' \
-  --output text)
-
-echo "Stack status: $STACK_STATUS"
-echo ""
-
-# Handle ROLLBACK_COMPLETE specially (no resources to clean)
-if [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
-  echo "ℹ Stack is in ROLLBACK_COMPLETE state (failed initial creation)"
-  echo "  Checking for orphaned resources..."
-  echo ""
+  echo "✗ Stack '$STACK_NAME' not found"
   
-  # Check for orphaned resources that may have been partially created
-  ORPHANED_STATE_BUCKET="terraform-state-694394480102-us-east-1"
-  ORPHANED_LOG_BUCKET="terraform-state-logs-694394480102-us-east-1"
-  ORPHANED_TABLE="terraform-locks-694394480102-us-east-1"
-  
-  # Check and clean orphaned main state bucket
-  if aws s3 ls "s3://$ORPHANED_STATE_BUCKET" &>/dev/null; then
-    echo "  Found orphaned S3 state bucket: $ORPHANED_STATE_BUCKET"
-    if [ "$AUTO_APPROVE" = false ]; then
-      read -p "  Delete orphaned state bucket? (yes/no): " confirm
-      if [ "$confirm" = "yes" ]; then
-        aws s3 rb "s3://$ORPHANED_STATE_BUCKET" --force
-        echo "  ✓ Orphaned state bucket deleted"
-      fi
-    else
-      aws s3 rb "s3://$ORPHANED_STATE_BUCKET" --force
-      echo "  ✓ Orphaned state bucket deleted"
-    fi
-  fi
-  
-  # Check and clean orphaned S3 log bucket
-  if aws s3 ls "s3://$ORPHANED_LOG_BUCKET" &>/dev/null; then
-    echo "  Found orphaned S3 log bucket: $ORPHANED_LOG_BUCKET"
-    if [ "$AUTO_APPROVE" = false ]; then
-      read -p "  Delete orphaned log bucket? (yes/no): " confirm
-      if [ "$confirm" = "yes" ]; then
-        aws s3 rb "s3://$ORPHANED_LOG_BUCKET" --force
-        echo "  ✓ Orphaned log bucket deleted"
-      fi
-    else
-      aws s3 rb "s3://$ORPHANED_LOG_BUCKET" --force
-      echo "  ✓ Orphaned log bucket deleted"
-    fi
-  fi
-  
-  # Check and clean orphaned DynamoDB table
-  if aws dynamodb describe-table --table-name "$ORPHANED_TABLE" &>/dev/null; then
-    echo "  Found orphaned DynamoDB table: $ORPHANED_TABLE"
-    if [ "$AUTO_APPROVE" = false ]; then
-      read -p "  Delete orphaned table? (yes/no): " confirm
-      if [ "$confirm" = "yes" ]; then
-        aws dynamodb update-table --table-name "$ORPHANED_TABLE" --no-deletion-protection-enabled &>/dev/null || true
-        aws dynamodb delete-table --table-name "$ORPHANED_TABLE"
-        echo "  ✓ Orphaned table deleted"
-      fi
-    else
-      aws dynamodb update-table --table-name "$ORPHANED_TABLE" --no-deletion-protection-enabled &>/dev/null || true
-      aws dynamodb delete-table --table-name "$ORPHANED_TABLE"
-      echo "  ✓ Orphaned table deleted"
-    fi
-  fi
-  
-  echo ""
-  if [ "$AUTO_APPROVE" = false ]; then
-    read -p "Delete failed stack? (yes/no): " confirm
-    if [ "$confirm" != "yes" ]; then
-      echo "Deletion cancelled"
-      exit 0
-    fi
-  fi
-  
-  # Disable termination protection
-  echo "Disabling termination protection..."
-  aws cloudformation update-termination-protection \
-    --stack-name "$STACK_NAME" \
-    --no-enable-termination-protection
-  
-  # Delete stack
-  echo "Deleting failed stack..."
-  aws cloudformation delete-stack --stack-name "$STACK_NAME"
-  aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
-  
-  echo ""
-  echo "✓ Failed stack and orphaned resources deleted"
-  exit 0
-fi
-
-# Handle IN_PROGRESS states
-if [[ "$STACK_STATUS" == *"_IN_PROGRESS" ]]; then
-  echo "✗ Stack operation in progress: $STACK_STATUS"
-  echo "  Wait for current operation to complete"
-  exit 1
-fi
-
-# Get stack resources before destruction
-echo "Checking current foundation resources..."
-BUCKET=$(aws cloudformation describe-stacks \
-  --stack-name "$STACK_NAME" \
-  --query 'Stacks[0].Outputs[?OutputKey==`TerraformStateBucket`].OutputValue' \
-  --output text 2>/dev/null || echo "unknown")
-
-TABLE=$(aws cloudformation describe-stacks \
-  --stack-name "$STACK_NAME" \
-  --query 'Stacks[0].Outputs[?OutputKey==`TerraformLockTable`].OutputValue' \
-  --output text 2>/dev/null || echo "unknown")
-
-echo "Current resources:"
-echo "  S3 Bucket: $BUCKET"
-echo "  DynamoDB Table: $TABLE"
-echo ""
-
-# Check for Project 3 (deployment-roles) resources
-echo "Checking for deployment-roles project resources..."
-DEPLOYMENT_ROLES_RESOURCES=$(aws resourcegroupstaggingapi get-resources \
-  --tag-filters "Key=Project,Values=terraform-aws-deployment-roles" \
-  --query 'ResourceTagMappingList[].ResourceARN' \
-  --output text 2>/dev/null || echo "")
-
-if [ -n "$DEPLOYMENT_ROLES_RESOURCES" ]; then
-  RESOURCE_COUNT=$(echo "$DEPLOYMENT_ROLES_RESOURCES" | wc -w | tr -d ' ')
-  echo "✗ Found $RESOURCE_COUNT resources from terraform-aws-deployment-roles project!"
-  echo ""
-  echo "Deployment roles resources found:"
-  echo "$DEPLOYMENT_ROLES_RESOURCES" | tr '\t' '\n' | head -10
-  echo ""
-  echo "You MUST destroy Project 3 (deployment-roles) first:"
-  echo "  cd terraform-aws-deployment-roles"
-  echo "  ./scripts/destroy.sh"
-  echo ""
-  exit 1
-fi
-
-echo "✓ No deployment-roles project resources found"
-echo ""
-
-# Check for state files in bucket
-if [ "$BUCKET" != "unknown" ] && aws s3 ls "s3://$BUCKET" &>/dev/null; then
-  STATE_FILES=$(aws s3 ls "s3://$BUCKET" --recursive | { grep -v "backups/" || true; } | wc -l | tr -d ' \n')
-  BACKUP_FILES=$(aws s3 ls "s3://$BUCKET/backups/" --recursive 2>/dev/null | wc -l | tr -d ' \n')
-  
-  echo "S3 bucket contents:"
-  echo "  Active state files: $STATE_FILES"
-  echo "  Backup files: $BACKUP_FILES"
-  echo ""
-  
-  if [ "$STATE_FILES" -gt 0 ]; then
-    echo "✗ Active state files found in bucket!"
-    echo ""
-    echo "State files found:"
-    aws s3 ls "s3://$BUCKET" --recursive | grep -v "backups/" | head -10
-    echo ""
-    echo "You MUST destroy all dependent projects first:"
-    echo "1. Destroy all Project 4+ (application projects)"
-    echo "2. Destroy Project 3 (deployment-roles)"
-    echo "3. Then destroy this foundation"
-    echo ""
+  if [ "$DESTROY_BUCKETS" = true ]; then
+    echo "Checking for orphaned buckets..."
     
-    if [ "$AUTO_APPROVE" = false ]; then
-      read -p "Continue anyway? This will DELETE ALL STATE FILES! (type 'DELETE' to confirm): " confirm
-      if [ "$confirm" != "DELETE" ]; then
-        echo "Destruction cancelled"
-        exit 0
-      fi
-    else
-      echo "⚠ Auto-approve enabled - proceeding despite state files"
+    ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    REGION=$(aws configure get region || echo "us-east-1")
+    STATE_BUCKET="terraform-state-${ACCOUNT_ID}-${REGION}"
+    LOG_BUCKET="terraform-state-logs-${ACCOUNT_ID}-${REGION}"
+    
+    if aws s3 ls "s3://$STATE_BUCKET" &>/dev/null; then
+      echo "Found orphaned state bucket: $STATE_BUCKET"
+      echo "Emptying and deleting..."
+      
+      # Delete all versions
+      aws s3api list-object-versions \
+        --bucket "$STATE_BUCKET" \
+        --output json \
+        --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+      jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
+      xargs -I {} -P 10 aws s3api delete-object --bucket "$STATE_BUCKET" {} &>/dev/null || true
+      
+      # Delete all delete markers
+      aws s3api list-object-versions \
+        --bucket "$STATE_BUCKET" \
+        --output json \
+        --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+      jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
+      xargs -I {} -P 10 aws s3api delete-object --bucket "$STATE_BUCKET" {} &>/dev/null || true
+      
+      aws s3 rm "s3://$STATE_BUCKET" --recursive &>/dev/null || true
+      aws s3api delete-bucket --bucket "$STATE_BUCKET"
+      echo "✓ Deleted $STATE_BUCKET"
+    fi
+    
+    if aws s3 ls "s3://$LOG_BUCKET" &>/dev/null; then
+      echo "Found orphaned log bucket: $LOG_BUCKET"
+      echo "Emptying and deleting..."
+      
+      aws s3api list-object-versions \
+        --bucket "$LOG_BUCKET" \
+        --output json \
+        --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+      jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
+      xargs -I {} -P 10 aws s3api delete-object --bucket "$LOG_BUCKET" {} &>/dev/null || true
+      
+      aws s3api list-object-versions \
+        --bucket "$LOG_BUCKET" \
+        --output json \
+        --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+      jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
+      xargs -I {} -P 10 aws s3api delete-object --bucket "$LOG_BUCKET" {} &>/dev/null || true
+      
+      aws s3 rm "s3://$LOG_BUCKET" --recursive &>/dev/null || true
+      aws s3api delete-bucket --bucket "$LOG_BUCKET"
+      echo "✓ Deleted $LOG_BUCKET"
     fi
   fi
   
-  echo "✓ No active state files found"
-  echo ""
+  exit 0
 fi
 
-# Check for active locks
-if [ "$TABLE" != "unknown" ]; then
-  ACTIVE_LOCKS=$(aws dynamodb scan \
-    --table-name "$TABLE" \
-    --select COUNT \
-    --query 'Count' \
-    --output text 2>/dev/null || echo "0")
-  
-  if [ "$ACTIVE_LOCKS" -gt 0 ]; then
-    echo "⚠ Active locks found in DynamoDB table: $ACTIVE_LOCKS"
-    echo "  This may indicate active Terraform operations"
-    echo ""
-  fi
-fi
+# Get stack resources
+echo "Step 1: Retrieving stack resources..."
+RESOURCES=$(aws cloudformation describe-stack-resources --stack-name "$STACK_NAME" --output json)
 
-# Final confirmation
-if [ "$AUTO_APPROVE" = false ]; then
-  echo "FINAL WARNING:"
-  echo "This action is IRREVERSIBLE and will:"
-  echo "- Delete the S3 bucket and ALL Terraform state files"
-  echo "- Delete the DynamoDB lock table"
-  echo "- Remove Parameter Store entries"
-  echo "- Make ALL dependent projects unmanageable"
-  echo ""
-  read -p "Type 'DESTROY FOUNDATION' to confirm: " confirm
+# Extract resource information
+STATE_BUCKET=$(echo "$RESOURCES" | jq -r '.StackResources[] | select(.ResourceType=="AWS::S3::Bucket" and .LogicalResourceId=="TerraformStateBucket") | .PhysicalResourceId' 2>/dev/null || echo "")
+LOG_BUCKET=$(echo "$RESOURCES" | jq -r '.StackResources[] | select(.ResourceType=="AWS::S3::Bucket" and .LogicalResourceId=="TerraformStateLogBucket") | .PhysicalResourceId' 2>/dev/null || echo "")
+DYNAMODB_TABLE=$(echo "$RESOURCES" | jq -r '.StackResources[] | select(.ResourceType=="AWS::DynamoDB::Table") | .PhysicalResourceId' 2>/dev/null || echo "")
 
-  if [ "$confirm" != "DESTROY FOUNDATION" ]; then
-    echo "Destruction cancelled"
-    exit 0
-  fi
-fi
-
-# Create final backup if bucket exists
-if [ "$BUCKET" != "unknown" ] && aws s3 ls "s3://$BUCKET" &>/dev/null; then
-  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-  FINAL_BACKUP_PREFIX="final-backup-${TIMESTAMP}"
-  
-  echo ""
-  echo "Creating final backup..."
-  aws s3 sync "s3://$BUCKET" "s3://$BUCKET/${FINAL_BACKUP_PREFIX}/" \
-    --exclude "${FINAL_BACKUP_PREFIX}/*" || {
-    echo "⚠ Backup failed, but continuing with destruction"
-  }
-  
-  echo "✓ Final backup created at: s3://$BUCKET/${FINAL_BACKUP_PREFIX}/"
-fi
-
-# Disable termination protection
+echo "Resources to destroy:"
+[ -n "$STATE_BUCKET" ] && echo "  - S3 State Bucket: $STATE_BUCKET $([ "$DESTROY_BUCKETS" = true ] && echo '(will delete)' || echo '(will retain)')"
+[ -n "$LOG_BUCKET" ] && echo "  - S3 Log Bucket: $LOG_BUCKET $([ "$DESTROY_BUCKETS" = true ] && echo '(will delete)' || echo '(will retain)')"
+[ -n "$DYNAMODB_TABLE" ] && echo "  - DynamoDB Table: $DYNAMODB_TABLE (will delete)"
 echo ""
-echo "Disabling termination protection..."
+
+# Step 2: Disable stack termination protection
+echo "Step 2: Disabling stack termination protection..."
 aws cloudformation update-termination-protection \
   --stack-name "$STACK_NAME" \
-  --no-enable-termination-protection
+  --no-enable-termination-protection &>/dev/null || true
+echo "✓ Termination protection disabled"
+echo ""
 
-# Empty S3 bucket (required for deletion)
-if [ "$BUCKET" != "unknown" ]; then
-  echo "Emptying S3 bucket..."
-  aws s3 rm "s3://$BUCKET" --recursive || {
-    echo "⚠ Failed to empty bucket completely"
-  }
+# Step 3: Disable DynamoDB deletion protection
+if [ -n "$DYNAMODB_TABLE" ]; then
+  echo "Step 3: Disabling DynamoDB deletion protection..."
+  aws dynamodb update-table \
+    --table-name "$DYNAMODB_TABLE" \
+    --no-deletion-protection-enabled &>/dev/null || true
+  echo "✓ DynamoDB deletion protection disabled"
+  echo ""
 fi
 
-# Delete CloudFormation stack
-echo "Deleting CloudFormation stack..."
+# Step 4: Empty S3 buckets if requested
+if [ "$DESTROY_BUCKETS" = true ]; then
+  if [ -n "$STATE_BUCKET" ]; then
+    echo "Step 4: Emptying S3 state bucket..."
+    
+    # Delete all object versions
+    echo "  Deleting all object versions..."
+    aws s3api list-object-versions \
+      --bucket "$STATE_BUCKET" \
+      --output json \
+      --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+    jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
+    xargs -I {} -P 10 aws s3api delete-object --bucket "$STATE_BUCKET" {} &>/dev/null || true
+    
+    # Delete all delete markers
+    echo "  Deleting all delete markers..."
+    aws s3api list-object-versions \
+      --bucket "$STATE_BUCKET" \
+      --output json \
+      --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+    jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
+    xargs -I {} -P 10 aws s3api delete-object --bucket "$STATE_BUCKET" {} &>/dev/null || true
+    
+    # Final cleanup
+    aws s3 rm "s3://$STATE_BUCKET" --recursive &>/dev/null || true
+    
+    echo "✓ State bucket emptied"
+    echo ""
+  fi
+  
+  if [ -n "$LOG_BUCKET" ]; then
+    echo "Step 5: Emptying S3 log bucket..."
+    
+    # Delete all object versions
+    aws s3api list-object-versions \
+      --bucket "$LOG_BUCKET" \
+      --output json \
+      --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+    jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
+    xargs -I {} -P 10 aws s3api delete-object --bucket "$LOG_BUCKET" {} &>/dev/null || true
+    
+    # Delete all delete markers
+    aws s3api list-object-versions \
+      --bucket "$LOG_BUCKET" \
+      --output json \
+      --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' 2>/dev/null | \
+    jq -r '.Objects[]? | "--key \(.Key) --version-id \(.VersionId)"' | \
+    xargs -I {} -P 10 aws s3api delete-object --bucket "$LOG_BUCKET" {} &>/dev/null || true
+    
+    # Final cleanup
+    aws s3 rm "s3://$LOG_BUCKET" --recursive &>/dev/null || true
+    
+    echo "✓ Log bucket emptied"
+    echo ""
+  fi
+fi
+
+# Step 6: Delete CloudFormation stack
+echo "Step 6: Deleting CloudFormation stack..."
 aws cloudformation delete-stack --stack-name "$STACK_NAME"
-
-echo "Waiting for stack deletion to complete..."
-aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME"
-
+echo "  Waiting for stack deletion to complete..."
+aws cloudformation wait stack-delete-complete --stack-name "$STACK_NAME" 2>/dev/null || {
+  echo "  Stack deletion encountered an issue, checking status..."
+  STACK_STATUS=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "DELETED")
+  
+  if [ "$STACK_STATUS" = "DELETE_FAILED" ]; then
+    echo "⚠ Stack deletion failed, checking for remaining resources..."
+  else
+    echo "✓ Stack deleted"
+  fi
+}
 echo ""
-echo "✓ Foundation destruction complete"
+
+# Step 7: Clean up remaining S3 buckets if requested
+if [ "$DESTROY_BUCKETS" = true ]; then
+  echo "Step 7: Cleaning up remaining S3 buckets..."
+  
+  if [ -n "$STATE_BUCKET" ] && aws s3 ls "s3://$STATE_BUCKET" &>/dev/null; then
+    echo "  Deleting state bucket..."
+    aws s3api delete-bucket --bucket "$STATE_BUCKET" 2>/dev/null || true
+    echo "  ✓ State bucket deleted"
+  fi
+  
+  if [ -n "$LOG_BUCKET" ] && aws s3 ls "s3://$LOG_BUCKET" &>/dev/null; then
+    echo "  Deleting log bucket..."
+    aws s3api delete-bucket --bucket "$LOG_BUCKET" 2>/dev/null || true
+    echo "  ✓ Log bucket deleted"
+  fi
+  echo ""
+fi
+
+echo "=========================================="
+echo "✓ DESTRUCTION COMPLETE"
+echo "=========================================="
 echo ""
-echo "All foundation resources have been destroyed."
-echo "Dependent projects are now unmanageable until foundation is recreated."
+if [ "$DESTROY_BUCKETS" = true ]; then
+  echo "All foundation resources have been destroyed."
+else
+  echo "Foundation stack destroyed. S3 buckets retained."
+  echo ""
+  echo "Retained buckets:"
+  [ -n "$STATE_BUCKET" ] && echo "  - $STATE_BUCKET"
+  [ -n "$LOG_BUCKET" ] && echo "  - $LOG_BUCKET"
+  echo ""
+  echo "To redeploy, run: ./scripts/deploy.sh"
+  echo "(Orphaned buckets will be automatically imported)"
+fi

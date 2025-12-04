@@ -5,7 +5,6 @@
 # Sensitive files
 *.pem
 *.key
-.env
 .aws/
 
 # OS files

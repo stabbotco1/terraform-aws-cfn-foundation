@@ -2,14 +2,43 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Terraform Foundation - Shared backend resources for OpenTofu state management'
 
 Parameters:
-  OidcAction:
+  CloudTrailEnabled:
     Type: String
-    Default: 'create'
-    AllowedValues: ['create', 'reuse']
-    Description: 'Whether to create new OIDC provider or reuse existing one'
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: 'Enable CloudTrail logging for account events'
+
+  Project:
+    Type: String
+    Description: 'Project name from git remote'
+
+  Repository:
+    Type: String
+    Description: 'Full repository URL'
+
+  Environment:
+    Type: String
+    Description: 'Environment name (e.g., Production, Development)'
+
+  Owner:
+    Type: String
+    Description: 'Resource owner'
+
+  DeployedBy:
+    Type: String
+    Description: 'IAM principal that deployed the stack'
+
+  ManagedBy:
+    Type: String
+    Default: 'CloudFormation'
+    Description: 'Management tool'
+
+  DeploymentID:
+    Type: String
+    Description: 'Deployment identifier'
 
 Conditions:
-  CreateOidcProvider: !Equals [!Ref OidcAction, 'create']
+  EnableCloudTrail: !Equals [!Ref CloudTrailEnabled, 'true']
 
 Resources:
   # S3 Bucket for access logs (must be created first)
@@ -31,6 +60,25 @@ Resources:
           - Id: ExpireLogs
             Status: Enabled
             ExpirationInDays: 90
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Repository
+          Value: !Ref Repository
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: Region
+          Value: !Ref AWS::Region
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
+        - Key: ManagedBy
+          Value: !Ref ManagedBy
+        - Key: DeploymentID
+          Value: !Ref DeploymentID
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
 
@@ -87,6 +135,25 @@ Resources:
       LoggingConfiguration:
         DestinationBucketName: !Ref TerraformStateLogBucket
         LogFilePrefix: 'access-logs/'
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Repository
+          Value: !Ref Repository
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: Region
+          Value: !Ref AWS::Region
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
+        - Key: ManagedBy
+          Value: !Ref ManagedBy
+        - Key: DeploymentID
+          Value: !Ref DeploymentID
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
 
@@ -106,28 +173,29 @@ Resources:
         PointInTimeRecoveryEnabled: true
       DeletionProtectionEnabled: true
       Tags:
-        - Key: Purpose
-          Value: TerraformStateLocking
+        - Key: Project
+          Value: !Ref Project
+        - Key: Repository
+          Value: !Ref Repository
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: Region
+          Value: !Ref AWS::Region
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
         - Key: ManagedBy
-          Value: CloudFormation
-    DeletionPolicy: Retain
-    UpdateReplacePolicy: Retain
+          Value: !Ref ManagedBy
+        - Key: DeploymentID
+          Value: !Ref DeploymentID
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
 
-  # GitHub OIDC Provider (conditional creation)
-  GitHubOidcProvider:
-    Type: AWS::IAM::OIDCProvider
-    Condition: CreateOidcProvider
-    Properties:
-      Url: https://token.actions.githubusercontent.com
-      ClientIdList:
-        - sts.amazonaws.com
-      ThumbprintList:
-        - 6938fd4d98bab03faadb97b34396831e3780aea1
-      Tags:
-        - Key: Purpose
-          Value: GitHubActionsOIDC
-        - Key: ManagedBy
-          Value: CloudFormation
+  # GitHub OIDC Provider (always reference existing ARN)
+  # OIDC provider must exist - deploy.sh will verify
 
   # Parameter Store entries for configuration distribution
   S3BucketParameter:
@@ -138,8 +206,11 @@ Resources:
       Value: !Ref TerraformStateBucket
       Description: 'S3 bucket name for Terraform state storage'
       Tags:
-        Purpose: TerraformFoundation
-        ManagedBy: CloudFormation
+        Project: !Ref Project
+        Repository: !Ref Repository
+        Environment: !Ref Environment
+        Owner: !Ref Owner
+        ManagedBy: !Ref ManagedBy
 
   DynamoDBTableParameter:
     Type: AWS::SSM::Parameter
@@ -149,22 +220,25 @@ Resources:
       Value: !Ref TerraformLockTable
       Description: 'DynamoDB table name for Terraform state locking'
       Tags:
-        Purpose: TerraformFoundation
-        ManagedBy: CloudFormation
+        Project: !Ref Project
+        Repository: !Ref Repository
+        Environment: !Ref Environment
+        Owner: !Ref Owner
+        ManagedBy: !Ref ManagedBy
 
   OidcProviderParameter:
     Type: AWS::SSM::Parameter
     Properties:
       Name: /terraform/foundation/oidc-github-provider
       Type: String
-      Value: !If
-        - CreateOidcProvider
-        - !Ref GitHubOidcProvider
-        - !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+      Value: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
       Description: 'GitHub OIDC provider ARN for authentication'
       Tags:
-        Purpose: TerraformFoundation
-        ManagedBy: CloudFormation
+        Project: !Ref Project
+        Repository: !Ref Repository
+        Environment: !Ref Environment
+        Owner: !Ref Owner
+        ManagedBy: !Ref ManagedBy
 
   SharedModulesRepoParameter:
     Type: AWS::SSM::Parameter
@@ -174,8 +248,11 @@ Resources:
       Value: 'terraform-aws-shared-modules'
       Description: 'Shared modules repository name'
       Tags:
-        Purpose: TerraformFoundation
-        ManagedBy: CloudFormation
+        Project: !Ref Project
+        Repository: !Ref Repository
+        Environment: !Ref Environment
+        Owner: !Ref Owner
+        ManagedBy: !Ref ManagedBy
 
 Outputs:
   TerraformStateBucket:
@@ -192,10 +269,7 @@ Outputs:
 
   GitHubOidcProviderArn:
     Description: 'GitHub OIDC provider ARN'
-    Value: !If
-      - CreateOidcProvider
-      - !Ref GitHubOidcProvider
-      - !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
+    Value: !Sub 'arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com'
     Export:
       Name: !Sub '${AWS::StackName}-OidcProvider'
 
