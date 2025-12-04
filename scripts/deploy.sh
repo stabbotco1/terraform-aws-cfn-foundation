@@ -600,12 +600,24 @@ OIDC_ARN=$(aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs[?OutputKey==`OidcProviderArn`].OutputValue' \
   --output text)
 
+# Check if CloudTrail bucket was created
+CLOUDTRAIL_BUCKET_DEPLOYED=$(aws cloudformation describe-stack-resources \
+  --stack-name "$STACK_NAME" \
+  --query 'StackResources[?LogicalResourceId==`CloudTrailLogBucket`].PhysicalResourceId' \
+  --output text 2>/dev/null || echo "")
+
 echo "✓ Foundation deployment complete"
 echo ""
 echo "Resources created:"
 echo "  S3 State Bucket: $BUCKET"
 echo "  DynamoDB Lock Table: $TABLE"
 echo "  OIDC Provider: $OIDC_ARN"
+
+if [ -n "$CLOUDTRAIL_BUCKET_DEPLOYED" ]; then
+  echo "  CloudTrail Bucket: $CLOUDTRAIL_BUCKET_DEPLOYED"
+  echo "  CloudTrail Trail: terraform-foundation-${ACCOUNT_ID} (logging enabled)"
+fi
+
 echo ""
 echo "Parameter Store entries created:"
 echo "  /terraform/foundation/s3-state-bucket"
