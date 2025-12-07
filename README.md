@@ -318,4 +318,4 @@ aws iam list-open-id-connect-providers
 
 ## Project Tags
 
-`#aws` `#terraform` `#cloudformation` `#foundation` `#core` `#iac` `#infrastructure` `#bootstrap` `#state-management` `#remote-state` `#s3-backend` `#dynamodb-locking` `#oidc` `#cicd` `#devops`
+`#aws` `#terraform` `#cloudformation` `#foundation` `#core` `#iac` `#infrastructure` `#bootstrap` `#state-management` `#remote-state` `#s3-backend` `#dynamodb-locking` `#oidc` `#cicd` `#devops` `#ai-assisted` `#ai-generated` `#llm-assisted` `#ai-pair-programming` `#agentic-ai` `#ai-infrastructure` `#ai-devops`
