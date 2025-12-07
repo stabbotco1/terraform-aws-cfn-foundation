@@ -58,6 +58,15 @@ echo "  Managed By: $MANAGED_BY"
 DEPLOYMENT_ID=${TAG_DEPLOYMENT_ID:-"Default"}
 echo "  Deployment ID: $DEPLOYMENT_ID"
 
+# Testing mode - force stack update
+FORCE_UPDATE=${TESTING_FORCE_STACK_UPDATE:-"false"}
+if [ "$FORCE_UPDATE" = "true" ]; then
+  TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  echo "  ⚠️  Testing Mode: Forcing stack update with timestamp: $TIMESTAMP"
+else
+  TIMESTAMP="not-set"
+fi
+
 # Detect OIDC provider from git remote
 echo ""
 echo "Step 3: Detecting OIDC provider from repository..."
@@ -412,6 +421,7 @@ EOF
     --template-body file://bootstrap.yaml \
     --capabilities CAPABILITY_IAM \
     --parameters \
+      ParameterKey=LastDeploymentTimestamp,ParameterValue="$TIMESTAMP" \
       ParameterKey=Project,ParameterValue="$PROJECT" \
       ParameterKey=Repository,ParameterValue="$REPOSITORY" \
       ParameterKey=Environment,ParameterValue="$ENVIRONMENT" \
@@ -470,6 +480,7 @@ elif [ "$ACTION" = "create" ]; then
     --template-body file://bootstrap.yaml \
     --capabilities CAPABILITY_IAM \
     --parameters \
+      ParameterKey=LastDeploymentTimestamp,ParameterValue="$TIMESTAMP" \
       ParameterKey=Project,ParameterValue="$PROJECT" \
       ParameterKey=Repository,ParameterValue="$REPOSITORY" \
       ParameterKey=Environment,ParameterValue="$ENVIRONMENT" \
@@ -499,11 +510,13 @@ elif [ "$ACTION" = "create" ]; then
   aws cloudformation wait stack-create-complete \
     --stack-name "$STACK_NAME"
 else
-  aws cloudformation update-stack \
+  # Capture output to handle "No updates" error
+  UPDATE_OUTPUT=$(aws cloudformation update-stack \
     --stack-name "$STACK_NAME" \
     --template-body file://bootstrap.yaml \
     --capabilities CAPABILITY_IAM \
     --parameters \
+      ParameterKey=LastDeploymentTimestamp,ParameterValue="$TIMESTAMP" \
       ParameterKey=Project,ParameterValue="$PROJECT" \
       ParameterKey=Repository,ParameterValue="$REPOSITORY" \
       ParameterKey=Environment,ParameterValue="$ENVIRONMENT" \
@@ -524,7 +537,53 @@ else
       Key=Region,Value="$REGION" \
       Key=DeployedBy,Value="$DEPLOYED_BY" \
       Key=ManagedBy,Value="$MANAGED_BY" \
-      Key=DeploymentID,Value="$DEPLOYMENT_ID"
+      Key=DeploymentID,Value="$DEPLOYMENT_ID" 2>&1) || {
+    
+    # Check if error is "No updates"
+    if echo "$UPDATE_OUTPUT" | grep -q "No updates are to be performed"; then
+      echo "✓ Stack already up to date (no changes detected)"
+      echo ""
+      echo "Step 6: Verifying deployment..."
+      
+      # Get stack outputs
+      BUCKET=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --query 'Stacks[0].Outputs[?OutputKey==`TerraformStateBucket`].OutputValue' \
+        --output text)
+
+      TABLE=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --query 'Stacks[0].Outputs[?OutputKey==`TerraformLockTable`].OutputValue' \
+        --output text)
+
+      OIDC_ARN=$(aws cloudformation describe-stacks \
+        --stack-name "$STACK_NAME" \
+        --query 'Stacks[0].Outputs[?OutputKey==`OidcProviderArn`].OutputValue' \
+        --output text)
+
+      echo "✓ Foundation deployment complete"
+      echo ""
+      echo "Resources created:"
+      echo "  S3 State Bucket: $BUCKET"
+      echo "  DynamoDB Lock Table: $TABLE"
+      echo "  OIDC Provider: $OIDC_ARN"
+      echo ""
+      echo "Parameter Store entries created:"
+      echo "  /terraform/foundation/s3-state-bucket"
+      echo "  /terraform/foundation/dynamodb-lock-table"
+      echo "  /terraform/foundation/oidc-provider"
+      echo ""
+      echo "Next steps:"
+      echo "  Deploy terraform-aws-deployment-roles for IAM role management"
+      echo ""
+      exit 0
+    else
+      # Real error
+      echo "✗ Stack update failed:"
+      echo "$UPDATE_OUTPUT"
+      exit 1
+    fi
+  }
 
   echo "✓ CloudFormation stack update initiated"
   echo "  Waiting for stack update to complete..."

@@ -2,6 +2,11 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: 'Terraform Foundation - Shared backend resources for Terraform/OpenTofu state management'
 
 Parameters:
+  LastDeploymentTimestamp:
+    Type: String
+    Description: 'Timestamp of last deployment (testing only - forces stack update)'
+    Default: 'not-set'
+
   Project:
     Type: String
     Description: 'Project name from git remote'
@@ -86,6 +91,8 @@ Resources:
           Value: !Ref ManagedBy
         - Key: DeploymentID
           Value: !Ref DeploymentID
+        - Key: LastDeploymentTimestamp
+          Value: !Ref LastDeploymentTimestamp
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
 
@@ -161,6 +168,8 @@ Resources:
           Value: !Ref ManagedBy
         - Key: DeploymentID
           Value: !Ref DeploymentID
+        - Key: LastDeploymentTimestamp
+          Value: !Ref LastDeploymentTimestamp
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
 
@@ -198,6 +207,8 @@ Resources:
           Value: !Ref ManagedBy
         - Key: DeploymentID
           Value: !Ref DeploymentID
+        - Key: LastDeploymentTimestamp
+          Value: !Ref LastDeploymentTimestamp
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
 
@@ -228,6 +239,8 @@ Resources:
           Value: !Ref ManagedBy
         - Key: DeploymentID
           Value: !Ref DeploymentID
+        - Key: LastDeploymentTimestamp
+          Value: !Ref LastDeploymentTimestamp
         - Key: OidcProvider
           Value: !Ref OidcProvider
 
