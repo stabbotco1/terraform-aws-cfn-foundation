@@ -2,6 +2,7 @@
 
 **Author:** Stephen Abbot  
 **Repository:** <https://github.com/stabbotco1/terraform-aws-cfn-foundation>
+**License:** MIT
 
 Bootstrap infrastructure for Terraform state management using AWS CloudFormation.
 
