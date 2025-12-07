@@ -12,6 +12,7 @@ Bootstrap infrastructure for Terraform state management using AWS CloudFormation
 - [Purpose](#purpose)
 - [Resources Deployed](#resources-deployed)
 - [Quick Start](#quick-start)
+- [Next Steps](#next-steps)
 - [Notable Features](#notable-features)
 - [Scripts](#scripts)
 - [Configuration](#configuration)
@@ -112,6 +113,14 @@ Shows stack status, resource details, and orphaned resources.
 ```
 
 Interactive destruction with safety prompts for stack and bucket deletion.
+
+## Next Steps
+
+After deploying the foundation, deploy the companion project for IAM role management:
+
+**[terraform-aws-deployment-roles](https://github.com/stabbotco1/terraform-aws-deployment-roles)**
+
+This project manages deployment roles used by subsequent Terraform projects, completing the foundational infrastructure setup.
 
 ## Notable Features
 
