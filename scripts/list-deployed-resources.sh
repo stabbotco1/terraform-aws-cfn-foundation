@@ -68,12 +68,6 @@ OIDC_ARN=$(aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs[?OutputKey==`OidcProviderArn`].OutputValue' \
   --output text 2>/dev/null || echo "unknown")
 
-# Get CloudTrail bucket (may not exist if CloudTrail is disabled)
-CLOUDTRAIL_BUCKET=$(aws cloudformation describe-stack-resources \
-  --stack-name "$STACK_NAME" \
-  --query 'StackResources[?LogicalResourceId==`CloudTrailLogBucket`].PhysicalResourceId' \
-  --output text 2>/dev/null || echo "")
-
 # S3 Bucket Details
 if [ "$BUCKET" != "unknown" ]; then
   echo "=== S3 Bucket Details ==="
@@ -187,35 +181,6 @@ if [ "$OIDC_ARN" != "unknown" ]; then
   else
     echo "Status: ✗ Not accessible"
   fi
-  echo ""
-fi
-
-# CloudTrail Details
-if [ -n "$CLOUDTRAIL_BUCKET" ]; then
-  echo "=== CloudTrail Details ==="
-  echo "S3 Bucket: $CLOUDTRAIL_BUCKET"
-
-  if aws s3api head-bucket --bucket "$CLOUDTRAIL_BUCKET" &>/dev/null; then
-    echo "Bucket Status: ✓ Exists and accessible"
-
-    # Object count
-    OBJECT_COUNT=$(aws s3 ls "s3://$CLOUDTRAIL_BUCKET" --recursive 2>/dev/null | wc -l || echo "0")
-    echo "Log Files: $OBJECT_COUNT"
-  else
-    echo "Bucket Status: ✗ Not accessible"
-  fi
-
-  # Check for trail
-  TRAIL_NAME="terraform-foundation-$(aws sts get-caller-identity --query Account --output text)"
-  if aws cloudtrail describe-trails --trail-name-list "$TRAIL_NAME" &>/dev/null 2>&1; then
-    TRAIL_STATUS=$(aws cloudtrail get-trail-status --name "$TRAIL_NAME" --query 'IsLogging' --output text 2>/dev/null || echo "unknown")
-    echo "Trail Name: $TRAIL_NAME"
-    echo "Trail Status: $([ "$TRAIL_STATUS" = "true" ] && echo "✓ Logging" || echo "✗ Not logging")"
-  fi
-  echo ""
-else
-  echo "=== CloudTrail Details ==="
-  echo "Status: Disabled (FEATURE_CLOUDTRAIL_ENABLED=false)"
   echo ""
 fi
 

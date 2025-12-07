@@ -58,10 +58,6 @@ echo "  Managed By: $MANAGED_BY"
 DEPLOYMENT_ID=${TAG_DEPLOYMENT_ID:-"Default"}
 echo "  Deployment ID: $DEPLOYMENT_ID"
 
-# CloudTrail enabled
-CLOUDTRAIL_ENABLED=${FEATURE_CLOUDTRAIL_ENABLED:-"true"}
-echo "  CloudTrail Enabled: $CLOUDTRAIL_ENABLED"
-
 # Detect OIDC provider from git remote
 echo ""
 echo "Step 3: Detecting OIDC provider from repository..."
@@ -166,7 +162,6 @@ esac
 # Define resource names
 STATE_BUCKET="terraform-state-${ACCOUNT_ID}-${REGION}"
 LOG_BUCKET="terraform-state-logs-${ACCOUNT_ID}-${REGION}"
-CLOUDTRAIL_BUCKET="cloudtrail-logs-${ACCOUNT_ID}-${REGION}"
 STACK_NAME="terraform-shared-infrastructure"
 
 # Check for existing stack first
@@ -228,7 +223,6 @@ if aws cloudformation describe-stacks --stack-name "$STACK_NAME" &>/dev/null; th
       # Clean up orphaned buckets from failed creation
       delete_versioned_bucket "$STATE_BUCKET"
       delete_versioned_bucket "$LOG_BUCKET"
-      delete_versioned_bucket "$CLOUDTRAIL_BUCKET"
 
       # Check and clean up OIDC provider if it exists
       OIDC_PROVIDER_ARN=$(aws iam list-open-id-connect-providers \
@@ -293,13 +287,11 @@ else
 
   STATE_BUCKET_STATE=$(detect_bucket_state "$STATE_BUCKET")
   LOG_BUCKET_STATE=$(detect_bucket_state "$LOG_BUCKET")
-  CLOUDTRAIL_BUCKET_STATE=$(detect_bucket_state "$CLOUDTRAIL_BUCKET")
 
-  if [ "$STATE_BUCKET_STATE" = "orphaned" ] || [ "$LOG_BUCKET_STATE" = "orphaned" ] || [ "$CLOUDTRAIL_BUCKET_STATE" = "orphaned" ]; then
+  if [ "$STATE_BUCKET_STATE" = "orphaned" ] || [ "$LOG_BUCKET_STATE" = "orphaned" ]; then
     echo "ℹ Orphaned S3 buckets detected from previous deployment"
     echo "  State bucket: $STATE_BUCKET_STATE"
     echo "  Log bucket: $LOG_BUCKET_STATE"
-    echo "  CloudTrail bucket: $CLOUDTRAIL_BUCKET_STATE"
     echo ""
     echo "  Options:"
     echo "    1. Import buckets into new stack (preserves existing state/logs)"
@@ -354,7 +346,6 @@ else
 
       delete_versioned_bucket "$STATE_BUCKET"
       delete_versioned_bucket "$LOG_BUCKET"
-      delete_versioned_bucket "$CLOUDTRAIL_BUCKET"
       echo "✓ Orphaned buckets cleaned up"
       ACTION="create"
     fi
@@ -404,19 +395,6 @@ EOF
     FIRST=false
   fi
 
-  if [ "$CLOUDTRAIL_BUCKET_STATE" = "orphaned" ]; then
-    [ "$FIRST" = false ] && echo "," >> /tmp/resources-to-import.json
-    cat >> /tmp/resources-to-import.json <<EOF
-  {
-    "ResourceType": "AWS::S3::Bucket",
-    "LogicalResourceId": "CloudTrailLogBucket",
-    "ResourceIdentifier": {
-      "BucketName": "$CLOUDTRAIL_BUCKET"
-    }
-  }
-EOF
-  fi
-
   cat >> /tmp/resources-to-import.json <<EOF
 
 ]
@@ -434,7 +412,6 @@ EOF
     --template-body file://bootstrap.yaml \
     --capabilities CAPABILITY_IAM \
     --parameters \
-      ParameterKey=CloudTrailEnabled,ParameterValue="$CLOUDTRAIL_ENABLED" \
       ParameterKey=Project,ParameterValue="$PROJECT" \
       ParameterKey=Repository,ParameterValue="$REPOSITORY" \
       ParameterKey=Environment,ParameterValue="$ENVIRONMENT" \
@@ -493,7 +470,6 @@ elif [ "$ACTION" = "create" ]; then
     --template-body file://bootstrap.yaml \
     --capabilities CAPABILITY_IAM \
     --parameters \
-      ParameterKey=CloudTrailEnabled,ParameterValue="$CLOUDTRAIL_ENABLED" \
       ParameterKey=Project,ParameterValue="$PROJECT" \
       ParameterKey=Repository,ParameterValue="$REPOSITORY" \
       ParameterKey=Environment,ParameterValue="$ENVIRONMENT" \
@@ -528,7 +504,6 @@ else
     --template-body file://bootstrap.yaml \
     --capabilities CAPABILITY_IAM \
     --parameters \
-      ParameterKey=CloudTrailEnabled,ParameterValue="$CLOUDTRAIL_ENABLED" \
       ParameterKey=Project,ParameterValue="$PROJECT" \
       ParameterKey=Repository,ParameterValue="$REPOSITORY" \
       ParameterKey=Environment,ParameterValue="$ENVIRONMENT" \
@@ -600,23 +575,12 @@ OIDC_ARN=$(aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs[?OutputKey==`OidcProviderArn`].OutputValue' \
   --output text)
 
-# Check if CloudTrail bucket was created
-CLOUDTRAIL_BUCKET_DEPLOYED=$(aws cloudformation describe-stack-resources \
-  --stack-name "$STACK_NAME" \
-  --query 'StackResources[?LogicalResourceId==`CloudTrailLogBucket`].PhysicalResourceId' \
-  --output text 2>/dev/null || echo "")
-
 echo "✓ Foundation deployment complete"
 echo ""
 echo "Resources created:"
 echo "  S3 State Bucket: $BUCKET"
 echo "  DynamoDB Lock Table: $TABLE"
 echo "  OIDC Provider: $OIDC_ARN"
-
-if [ -n "$CLOUDTRAIL_BUCKET_DEPLOYED" ]; then
-  echo "  CloudTrail Bucket: $CLOUDTRAIL_BUCKET_DEPLOYED"
-  echo "  CloudTrail Trail: terraform-foundation-${ACCOUNT_ID} (logging enabled)"
-fi
 
 echo ""
 echo "Parameter Store entries created:"
