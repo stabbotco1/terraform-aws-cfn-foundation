@@ -203,3 +203,66 @@ done
 
 echo ""
 echo "✓ Foundation resource listing complete"
+
+# Check for orphaned resources
+echo ""
+echo "=== Orphaned Resource Detection ==="
+
+# Get account and region for bucket name matching
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+REGION=$(aws configure get region || echo "us-east-1")
+
+# Expected bucket names
+EXPECTED_STATE_BUCKET="terraform-state-${ACCOUNT_ID}-${REGION}"
+EXPECTED_LOG_BUCKET="terraform-state-logs-${ACCOUNT_ID}-${REGION}"
+
+# Check for CloudTrail bucket (should not exist)
+CLOUDTRAIL_BUCKET="cloudtrail-logs-${ACCOUNT_ID}-${REGION}"
+
+ORPHANS_FOUND=false
+
+# Check CloudTrail bucket
+if aws s3api head-bucket --bucket "$CLOUDTRAIL_BUCKET" &>/dev/null; then
+  echo "⚠️  Orphaned CloudTrail bucket detected:"
+  echo "  Bucket: $CLOUDTRAIL_BUCKET"
+  echo "  Status: Not managed by stack (retained from CloudTrail removal)"
+  echo ""
+  ORPHANS_FOUND=true
+fi
+
+# Check for other buckets with project naming pattern
+aws s3api list-buckets --query 'Buckets[].Name' --output text | tr '\t' '\n' | while read -r bucket; do
+  # Skip expected buckets
+  if [ "$bucket" = "$EXPECTED_STATE_BUCKET" ] || [ "$bucket" = "$EXPECTED_LOG_BUCKET" ]; then
+    continue
+  fi
+  
+  # Check if bucket matches project naming patterns
+  if echo "$bucket" | grep -q "terraform.*${ACCOUNT_ID}.*${REGION}"; then
+    # Check if bucket has project tags
+    TAGS=$(aws s3api get-bucket-tagging --bucket "$bucket" 2>/dev/null | \
+      jq -r '.TagSet[] | select(.Key=="Project") | .Value' 2>/dev/null || echo "")
+    
+    if [ "$TAGS" = "terraform-aws-cfn-foundation" ]; then
+      echo "⚠️  Orphaned S3 bucket detected:"
+      echo "  Bucket: $bucket"
+      echo "  Status: Has project tags but not managed by stack"
+      echo ""
+      ORPHANS_FOUND=true
+    fi
+  fi
+done
+
+if [ "$ORPHANS_FOUND" = false ]; then
+  echo "✓ No orphaned resources detected"
+fi
+
+echo ""
+echo "Note: Orphaned resources may be:"
+echo "  - Retained from previous stack deletion (DeletionPolicy: Retain)"
+echo "  - Left over from failed deployments"
+echo "  - From CloudTrail feature removal"
+echo ""
+echo "To clean up, run: ./scripts/destroy.sh (will prompt for bucket deletion)"
+
+echo ""
