@@ -14,56 +14,56 @@ Removed CloudTrail from infrastructure project, added testing support and orphan
 
 ## Verification & Testing
 
-6. **Single verification is insufficient** - Need 2-3 independent verification methods minimum
-7. **Happy path ≠ complete testing** - Must test idempotency, errors, edge cases, recovery
-8. **Overconfidence is dangerous** - Agent claimed success after minimal testing
-9. **State comparison required** - Must verify before/after states, not just final state
-10. **Tag-based queries reveal truth** - Found orphaned CloudTrail bucket via tags that stack queries missed
+1. **Single verification is insufficient** - Need 2-3 independent verification methods minimum
+2. **Happy path ≠ complete testing** - Must test idempotency, errors, edge cases, recovery
+3. **Overconfidence is dangerous** - Agent claimed success after minimal testing
+4. **State comparison required** - Must verify before/after states, not just final state
+5. **Tag-based queries reveal truth** - Found orphaned CloudTrail bucket via tags that stack queries missed
 
 ## Implementation Quality
 
-11. **"No updates" is valid state** - CloudFormation correctly reports when nothing changed; script must handle gracefully
-12. **Orphaned resources are real** - DeletionPolicy: Retain creates orphans that need detection
-13. **Testing infrastructure ≠ production** - TESTING_FORCE_STACK_UPDATE flag enables forced updates for testing only
-14. **Timestamps can force updates** - But it's bad practice for production (good for testing)
-15. **Error handling was incomplete** - Script had `set -euo pipefail` but didn't catch "No updates" error
+1. **"No updates" is valid state** - CloudFormation correctly reports when nothing changed; script must handle gracefully
+2. **Orphaned resources are real** - DeletionPolicy: Retain creates orphans that need detection
+3. **Testing infrastructure ≠ production** - TESTING_FORCE_STACK_UPDATE flag enables forced updates for testing only
+4. **Timestamps can force updates** - But it's bad practice for production (good for testing)
+5. **Error handling was incomplete** - Script had `set -euo pipefail` but didn't catch "No updates" error
 
 ## Architecture Decisions
 
-16. **Separation of concerns** - list-deployed-resources.sh lists orphans; destroy.sh destroys stack resources only
-17. **Informational vs actionable** - Orphan detection should inform, not prescribe actions
-18. **Naming patterns enable detection** - Consistent naming (`{resource}-{account}-{region}`) enables high-confidence orphan detection
-19. **Multiple detection methods** - Naming + tags + existence + stack exclusion = 95%+ confidence
-20. **Termination protection is critical** - Prevents accidental deletion of foundational infrastructure
+1. **Separation of concerns** - list-deployed-resources.sh lists orphans; destroy.sh destroys stack resources only
+2. **Informational vs actionable** - Orphan detection should inform, not prescribe actions
+3. **Naming patterns enable detection** - Consistent naming (`{resource}-{account}-{region}`) enables high-confidence orphan detection
+4. **Multiple detection methods** - Naming + tags + existence + stack exclusion = 95%+ confidence
+5. **Termination protection is critical** - Prevents accidental deletion of foundational infrastructure
 
 ## Process Improvements
 
-21. **Verification requirements document** - Added explicit testing scope, methods, and reporting requirements to ai_context.md
-22. **Trust but verify principle** - Single source insufficient, two acceptable, three+ ideal
-23. **Report what wasn't tested** - Honesty about gaps more valuable than false confidence
-24. **Commit permission matters** - Explicit permission to commit enables faster iteration
-25. **Git state blocks testing** - Prerequisites check prevents testing with uncommitted changes
+1. **Verification requirements document** - Added explicit testing scope, methods, and reporting requirements to ai_context.md
+2. **Trust but verify principle** - Single source insufficient, two acceptable, three+ ideal
+3. **Report what wasn't tested** - Honesty about gaps more valuable than false confidence
+4. **Commit permission matters** - Explicit permission to commit enables faster iteration
+5. **Git state blocks testing** - Prerequisites check prevents testing with uncommitted changes
 
 ## Technical Discoveries
 
-26. **CloudFormation conditions work** - `Condition: EnableCloudTrail` properly removed resources
-27. **Stack updates preserve resources** - Removing conditional resources from template deletes them (except Retain policy)
-28. **Parameter changes trigger updates** - Adding LastDeploymentTimestamp parameter enables testing mode
-29. **Bash variable precedence** - .env file loads early, environment variables can override
-30. **Resource ARN vs ID mismatch** - Initial orphan detection failed because comparing ARNs to resource IDs
+1. **CloudFormation conditions work** - `Condition: EnableCloudTrail` properly removed resources
+2. **Stack updates preserve resources** - Removing conditional resources from template deletes them (except Retain policy)
+3. **Parameter changes trigger updates** - Adding LastDeploymentTimestamp parameter enables testing mode
+4. **Bash variable precedence** - .env file loads early, environment variables can override
+5. **Resource ARN vs ID mismatch** - Initial orphan detection failed because comparing ARNs to resource IDs
 
 ## Remaining Gaps
 
-31. **destroy.sh untested** - Don't know if it handles current state correctly
-32. **Fresh deployment untested** - Would require destroying existing stack
-33. **ROLLBACK_COMPLETE recovery untested** - Error recovery path not validated
-34. **Testing mode not fully validated** - Git state requirements prevented complete testing
-35. **Orphaned bucket cleanup undefined** - No automated way to clean up orphans (by design)
+1. **destroy.sh untested** - Don't know if it handles current state correctly
+2. **Fresh deployment untested** - Would require destroying existing stack
+3. **ROLLBACK_COMPLETE recovery untested** - Error recovery path not validated
+4. **Testing mode not fully validated** - Git state requirements prevented complete testing
+5. **Orphaned bucket cleanup undefined** - No automated way to clean up orphans (by design)
 
 ## Meta-Lessons
 
-36. **Time investment in context pays off** - Most of session was context-setting, but enabled better work
-37. **Guardrails prevent waste** - Verification requirements would have caught incomplete testing earlier
-38. **Iterative refinement works** - Multiple rounds of testing revealed issues
-39. **Explicit scope prevents scope creep** - "Remove CloudTrail" stayed focused after initial corrections
-40. **Documentation of process matters** - This lessons learned list captures knowledge for future sessions
+1. **Time investment in context pays off** - Most of session was context-setting, but enabled better work
+2. **Guardrails prevent waste** - Verification requirements would have caught incomplete testing earlier
+3. **Iterative refinement works** - Multiple rounds of testing revealed issues
+4. **Explicit scope prevents scope creep** - "Remove CloudTrail" stayed focused after initial corrections
+5. **Documentation of process matters** - This lessons learned list captures knowledge for future sessions
