@@ -278,6 +278,18 @@ To enable forced stack updates for testing:
 3. Configure AWS credentials with sufficient permissions
 4. Clean git state (commit/push changes)
 
+### OIDC Provider Already Exists
+
+**Cause:** OIDC provider with same URL already exists in account (from previous deployment or another project)
+
+**Solution:**
+
+1. Check existing providers: `aws iam list-open-id-connect-providers`
+2. Either delete existing provider or skip this deployment
+3. Note: Only one OIDC provider per URL allowed per account
+
+**Limitation:** Deploy script does not check for existing OIDC providers before stack creation
+
 ### Investigation Commands
 
 ```bash
