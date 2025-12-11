@@ -258,9 +258,9 @@ Resources:
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals:
-                !Sub '${OidcUrl}:aud': !Ref OidcAudience
+                'token.actions.githubusercontent.com:aud': !Ref OidcAudience
               StringLike:
-                !Sub '${OidcUrl}:sub': 'repo:stabbotco1/terraform-aws-deployment-roles:*'
+                'token.actions.githubusercontent.com:sub': 'repo:stabbotco1/terraform-aws-deployment-roles:*'
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/IAMFullAccess
       Policies:
