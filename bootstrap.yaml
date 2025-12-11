@@ -244,6 +244,62 @@ Resources:
         - Key: OidcProvider
           Value: !Ref OidcProvider
 
+  # Deployment role for terraform-aws-deployment-roles project
+  DeploymentRolesRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'terraform-deployment-roles-${AWS::AccountId}-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref OidcProviderResource
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                !Sub '${OidcUrl}:aud': !Ref OidcAudience
+              StringLike:
+                !Sub '${OidcUrl}:sub': 'repo:stabbotco1/terraform-aws-deployment-roles:*'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/IAMFullAccess
+      Policies:
+        - PolicyName: ParameterStoreAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter
+                  - ssm:AddTagsToResource
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/terraform/*'
+      Tags:
+        - Key: Project
+          Value: !Ref Project
+        - Key: Repository
+          Value: !Ref Repository
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: Region
+          Value: !Ref AWS::Region
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
+        - Key: ManagedBy
+          Value: !Ref ManagedBy
+        - Key: DeploymentID
+          Value: !Ref DeploymentID
+        - Key: LastDeploymentTimestamp
+          Value: !Ref LastDeploymentTimestamp
+        - Key: TargetRepository
+          Value: 'stabbotco1/terraform-aws-deployment-roles'
+
   # Parameter Store entries for configuration distribution
   S3BucketParameter:
     Type: AWS::SSM::Parameter
@@ -287,6 +343,20 @@ Resources:
         Owner: !Ref Owner
         ManagedBy: !Ref ManagedBy
 
+  DeploymentRolesRoleParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /terraform/foundation/deployment-roles-role-arn
+      Type: String
+      Value: !GetAtt DeploymentRolesRole.Arn
+      Description: 'IAM role ARN for terraform-aws-deployment-roles project'
+      Tags:
+        Project: !Ref Project
+        Repository: !Ref Repository
+        Environment: !Ref Environment
+        Owner: !Ref Owner
+        ManagedBy: !Ref ManagedBy
+
 Outputs:
   TerraformStateBucket:
     Description: 'S3 bucket for Terraform state storage'
@@ -305,6 +375,12 @@ Outputs:
     Value: !Ref OidcProviderResource
     Export:
       Name: !Sub '${AWS::StackName}-OidcProvider'
+
+  DeploymentRolesRoleArn:
+    Description: 'IAM role ARN for terraform-aws-deployment-roles project'
+    Value: !GetAtt DeploymentRolesRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DeploymentRolesRole'
 
   StackName:
     Description: 'CloudFormation stack name'

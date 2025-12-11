@@ -68,6 +68,11 @@ OIDC_ARN=$(aws cloudformation describe-stacks \
   --query 'Stacks[0].Outputs[?OutputKey==`OidcProviderArn`].OutputValue' \
   --output text 2>/dev/null || echo "unknown")
 
+DEPLOYMENT_ROLE_ARN=$(aws cloudformation describe-stacks \
+  --stack-name "$STACK_NAME" \
+  --query 'Stacks[0].Outputs[?OutputKey==`DeploymentRolesRoleArn`].OutputValue' \
+  --output text 2>/dev/null || echo "unknown")
+
 # S3 Bucket Details
 if [ "$BUCKET" != "unknown" ]; then
   echo "=== S3 Bucket Details ==="
@@ -184,12 +189,43 @@ if [ "$OIDC_ARN" != "unknown" ]; then
   echo ""
 fi
 
+# Deployment Role Details
+if [ "$DEPLOYMENT_ROLE_ARN" != "unknown" ]; then
+  echo "=== Deployment Role Details ==="
+  echo "ARN: $DEPLOYMENT_ROLE_ARN"
+
+  ROLE_NAME=$(echo "$DEPLOYMENT_ROLE_ARN" | cut -d'/' -f2)
+  
+  if aws iam get-role --role-name "$ROLE_NAME" &>/dev/null; then
+    echo "Status: ✓ Exists and accessible"
+    
+    # Role creation date
+    CREATION_DATE=$(aws iam get-role --role-name "$ROLE_NAME" \
+      --query 'Role.CreateDate' --output text)
+    echo "Created: $CREATION_DATE"
+    
+    # Attached policies
+    ATTACHED_POLICIES=$(aws iam list-attached-role-policies --role-name "$ROLE_NAME" \
+      --query 'AttachedPolicies[].PolicyName' --output text)
+    echo "Attached Policies: $ATTACHED_POLICIES"
+    
+    # Target repository from tags
+    TARGET_REPO=$(aws iam list-role-tags --role-name "$ROLE_NAME" \
+      --query 'Tags[?Key==`TargetRepository`].Value' --output text 2>/dev/null || echo "unknown")
+    echo "Target Repository: $TARGET_REPO"
+  else
+    echo "Status: ✗ Not accessible"
+  fi
+  echo ""
+fi
+
 # Parameter Store Entries
 echo "=== Parameter Store Entries ==="
 PARAMETERS=(
   "/terraform/foundation/s3-state-bucket"
   "/terraform/foundation/dynamodb-lock-table"
   "/terraform/foundation/oidc-provider"
+  "/terraform/foundation/deployment-roles-role-arn"
 )
 
 for param in "${PARAMETERS[@]}"; do
