@@ -419,7 +419,7 @@ EOF
     --change-set-type IMPORT \
     --resources-to-import file:///tmp/resources-to-import.json \
     --template-body file://bootstrap.yaml \
-    --capabilities CAPABILITY_IAM \
+    --capabilities CAPABILITY_NAMED_IAM \
     --parameters \
       ParameterKey=LastDeploymentTimestamp,ParameterValue="$TIMESTAMP" \
       ParameterKey=Project,ParameterValue="$PROJECT" \
@@ -478,7 +478,7 @@ elif [ "$ACTION" = "create" ]; then
   aws cloudformation create-stack \
     --stack-name "$STACK_NAME" \
     --template-body file://bootstrap.yaml \
-    --capabilities CAPABILITY_IAM \
+    --capabilities CAPABILITY_NAMED_IAM \
     --parameters \
       ParameterKey=LastDeploymentTimestamp,ParameterValue="$TIMESTAMP" \
       ParameterKey=Project,ParameterValue="$PROJECT" \
@@ -514,7 +514,7 @@ else
   UPDATE_OUTPUT=$(aws cloudformation update-stack \
     --stack-name "$STACK_NAME" \
     --template-body file://bootstrap.yaml \
-    --capabilities CAPABILITY_IAM \
+    --capabilities CAPABILITY_NAMED_IAM \
     --parameters \
       ParameterKey=LastDeploymentTimestamp,ParameterValue="$TIMESTAMP" \
       ParameterKey=Project,ParameterValue="$PROJECT" \
