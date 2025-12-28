@@ -1,0 +1,444 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Terraform Foundation - Shared backend resources for Terraform/OpenTofu state management'
+
+Parameters:
+  AccountAlias:
+    Type: String
+    Description: 'AWS account alias (empty string if not set)'
+    Default: ''
+
+  CostCenter:
+    Type: String
+    Default: 'default'
+    Description: 'Cost center for billing allocation'
+
+  DeploymentRole:
+    Type: String
+    Description: 'IAM role ARN used for deployment'
+
+  Environment:
+    Type: String
+    Default: 'prd'
+    Description: 'Environment (prd, stg, tst, dev)'
+
+  ManagedBy:
+    Type: String
+    Default: 'CloudFormation'
+    Description: 'Management tool'
+
+  Owner:
+    Type: String
+    Default: 'stephenabbot'
+    Description: 'Resource owner'
+
+  Project:
+    Type: String
+    Description: 'Project in format org/repo-name'
+
+  Repository:
+    Type: String
+    Description: 'Full git repository URL'
+
+  Region:
+    Type: String
+    Description: 'AWS region for regional resources, or na for global resources'
+
+  TargetDeploymentRolesRepository:
+    Type: String
+    Default: 'foundation-iam-deploy-roles'
+    Description: 'Target repository for deployment roles (e.g., org/foundation-iam-deploy-roles)'
+
+  OidcProvider:
+    Type: String
+    Description: 'OIDC provider type (github, gitlab, bitbucket)'
+
+  OidcUrl:
+    Type: String
+    Description: 'OIDC provider URL'
+
+  OidcThumbprints:
+    Type: CommaDelimitedList
+    Description: 'OIDC provider thumbprints (comma-separated)'
+
+  OidcAudience:
+    Type: String
+    Description: 'OIDC provider audience'
+
+Resources:
+  # S3 Bucket for access logs (must be created first)
+  TerraformStateLogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'terraform-state-logs-${AWS::AccountId}-${AWS::Region}'
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireLogs
+            Status: Enabled
+            ExpirationInDays: 90
+      Tags:
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: AccountAlias
+          Value: !Ref AccountAlias
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DeploymentRole
+          Value: !Ref DeploymentRole
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedBy
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Project
+          Value: !Ref Project
+        - Key: Region
+          Value: !Ref Region
+        - Key: Repository
+          Value: !Ref Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+  # Bucket policy to allow S3 log delivery
+  TerraformStateLogBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref TerraformStateLogBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: S3ServerAccessLogsPolicy
+            Effect: Allow
+            Principal:
+              Service: logging.s3.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${TerraformStateLogBucket.Arn}/access-logs/*'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  # S3 Bucket for Terraform state storage
+  TerraformStateBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: TerraformStateLogBucketPolicy
+    Properties:
+      BucketName: !Sub 'terraform-state-${AWS::AccountId}-${AWS::Region}'
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+            BucketKeyEnabled: true
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: IntelligentTiering
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 0
+                StorageClass: INTELLIGENT_TIERING
+          - Id: BackupRetention
+            Status: Enabled
+            Prefix: 'backups/'
+            Transitions:
+              - TransitionInDays: 30
+                StorageClass: INTELLIGENT_TIERING
+            ExpirationInDays: 365
+      LoggingConfiguration:
+        DestinationBucketName: !Ref TerraformStateLogBucket
+        LogFilePrefix: 'access-logs/'
+      Tags:
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: AccountAlias
+          Value: !Ref AccountAlias
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DeploymentRole
+          Value: !Ref DeploymentRole
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedBy
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Project
+          Value: !Ref Project
+        - Key: Region
+          Value: !Ref Region
+        - Key: Repository
+          Value: !Ref Repository
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+
+  # DynamoDB table for state locking
+  TerraformLockTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'terraform-locks-${AWS::AccountId}-${AWS::Region}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: LockID
+          AttributeType: S
+      KeySchema:
+        - AttributeName: LockID
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      DeletionProtectionEnabled: true
+      Tags:
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: AccountAlias
+          Value: !Ref AccountAlias
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DeploymentRole
+          Value: !Ref DeploymentRole
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedBy
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Project
+          Value: !Ref Project
+        - Key: Region
+          Value: !Ref Region
+        - Key: Repository
+          Value: !Ref Repository
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+
+  # OIDC Provider (auto-detected from git remote: GitHub, GitLab, or Bitbucket)
+  OidcProviderResource:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: !Ref OidcUrl
+      ClientIdList:
+        - !Ref OidcAudience
+      ThumbprintList: !Ref OidcThumbprints
+      Tags:
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: AccountAlias
+          Value: !Ref AccountAlias
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DeploymentRole
+          Value: !Ref DeploymentRole
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedBy
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Project
+          Value: !Ref Project
+        - Key: Region
+          Value: na
+        - Key: Repository
+          Value: !Ref Repository
+        - Key: OidcProvider
+          Value: !Ref OidcProvider
+
+  # Deployment role for foundation-iam-deploy-roles project
+  DeploymentRolesRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'terraform-deployment-roles-${AWS::AccountId}-${AWS::Region}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Ref OidcProviderResource
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'token.actions.githubusercontent.com:aud': !Ref OidcAudience
+              StringLike:
+                'token.actions.githubusercontent.com:sub': !Sub 'repo:${TargetDeploymentRolesRepository}:*'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/IAMFullAccess
+        - arn:aws:iam::aws:policy/PowerUserAccess
+      Policies:
+        - PolicyName: ParameterStoreAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter
+                  - ssm:AddTagsToResource
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/terraform/*'
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/deployment-roles/*'
+        - PolicyName: TerraformBackendAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub 'arn:aws:s3:::${TerraformStateBucket}/*'
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub 'arn:aws:s3:::${TerraformStateBucket}'
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:DeleteItem
+                Resource: !GetAtt TerraformLockTable.Arn
+      Tags:
+        - Key: AccountId
+          Value: !Ref AWS::AccountId
+        - Key: AccountAlias
+          Value: !Ref AccountAlias
+        - Key: CostCenter
+          Value: !Ref CostCenter
+        - Key: DeploymentRole
+          Value: !Ref DeploymentRole
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: !Ref ManagedBy
+        - Key: Owner
+          Value: !Ref Owner
+        - Key: Project
+          Value: !Ref Project
+        - Key: Region
+          Value: na
+        - Key: Repository
+          Value: !Ref Repository
+        - Key: TargetRepository
+          Value: !Ref TargetDeploymentRolesRepository
+
+  # Parameter Store entries for configuration distribution
+  S3BucketParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /terraform/foundation/s3-state-bucket
+      Type: String
+      Value: !Ref TerraformStateBucket
+      Description: 'S3 bucket name for Terraform state storage'
+      Tags:
+        AccountId: !Ref AWS::AccountId
+        AccountAlias: !Ref AccountAlias
+        CostCenter: !Ref CostCenter
+        DeploymentRole: !Ref DeploymentRole
+        Environment: !Ref Environment
+        ManagedBy: !Ref ManagedBy
+        Owner: !Ref Owner
+        Project: !Ref Project
+        Region: !Ref Region
+        Repository: !Ref Repository
+
+  DynamoDBTableParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /terraform/foundation/dynamodb-lock-table
+      Type: String
+      Value: !Ref TerraformLockTable
+      Description: 'DynamoDB table name for Terraform state locking'
+      Tags:
+        AccountId: !Ref AWS::AccountId
+        AccountAlias: !Ref AccountAlias
+        CostCenter: !Ref CostCenter
+        DeploymentRole: !Ref DeploymentRole
+        Environment: !Ref Environment
+        ManagedBy: !Ref ManagedBy
+        Owner: !Ref Owner
+        Project: !Ref Project
+        Region: !Ref Region
+        Repository: !Ref Repository
+
+  OidcProviderParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /terraform/foundation/oidc-provider
+      Type: String
+      Value: !Ref OidcProviderResource
+      Description: 'OIDC provider ARN for CI/CD authentication'
+      Tags:
+        AccountId: !Ref AWS::AccountId
+        AccountAlias: !Ref AccountAlias
+        CostCenter: !Ref CostCenter
+        DeploymentRole: !Ref DeploymentRole
+        Environment: !Ref Environment
+        ManagedBy: !Ref ManagedBy
+        Owner: !Ref Owner
+        Project: !Ref Project
+        Region: !Ref Region
+        Repository: !Ref Repository
+
+  DeploymentRolesRoleParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /terraform/foundation/deployment-roles-role-arn
+      Type: String
+      Value: !GetAtt DeploymentRolesRole.Arn
+      Description: 'IAM role ARN for foundation-iam-deploy-roles project'
+      Tags:
+        AccountId: !Ref AWS::AccountId
+        AccountAlias: !Ref AccountAlias
+        CostCenter: !Ref CostCenter
+        DeploymentRole: !Ref DeploymentRole
+        Environment: !Ref Environment
+        ManagedBy: !Ref ManagedBy
+        Owner: !Ref Owner
+        Project: !Ref Project
+        Region: !Ref Region
+        Repository: !Ref Repository
+
+Outputs:
+  TerraformStateBucket:
+    Description: 'S3 bucket for Terraform state storage'
+    Value: !Ref TerraformStateBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-StateBucket'
+
+  TerraformLockTable:
+    Description: 'DynamoDB table for Terraform state locking'
+    Value: !Ref TerraformLockTable
+    Export:
+      Name: !Sub '${AWS::StackName}-LockTable'
+
+  OidcProviderArn:
+    Description: 'OIDC provider ARN for CI/CD authentication'
+    Value: !Ref OidcProviderResource
+    Export:
+      Name: !Sub '${AWS::StackName}-OidcProvider'
+
+  DeploymentRolesRoleArn:
+    Description: 'IAM role ARN for foundation-iam-deploy-roles project'
+    Value: !GetAtt DeploymentRolesRole.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-DeploymentRolesRole'
+
+  StackName:
+    Description: 'CloudFormation stack name'
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub '${AWS::StackName}-StackName'
