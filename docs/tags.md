@@ -1,19 +1,15 @@
 # Resource Tags
 
-All resources deployed by this foundation include comprehensive tags for cost allocation, ownership tracking, and resource management.
+All resources deployed by this foundation are tagged according to the ecosystem standard defined in [foundation-standards](https://github.com/stephenabbot/foundation-standards/blob/main/tagging/tagging-standard.md).
 
 ## Standard Tags Applied
 
-- **AccountId**: AWS account ID where resources are deployed
-- **AccountAlias**: AWS account alias (if configured)
-- **CostCenter**: Cost center for billing allocation (from TAG_COST_CENTER)
-- **DeploymentRole**: IAM role ARN used for deployment
-- **Environment**: Environment designation (from TAG_ENVIRONMENT)
-- **ManagedBy**: Management tool (CloudFormation)
-- **Owner**: Resource owner (from TAG_OWNER)
-- **Project**: Project name derived from repository
-- **Region**: AWS region for regional resources, or "na" for global resources
-- **Repository**: Full git repository URL
+- **ProjectName**: Repository name derived from git remote
+- **ProjectRepository**: Full git repository URL
+- **ManagedBy**: Deployment tool (`CloudFormation`)
+- **Environment**: Deployment environment (from `TAG_ENVIRONMENT` in config.env)
+- **DeployedBy**: IAM principal ARN used for deployment (from AWS STS)
+- **AccountAlias**: AWS account alias (from AWS IAM)
 
 ## Resource-Specific Tags
 
@@ -23,14 +19,14 @@ All resources deployed by this foundation include comprehensive tags for cost al
 
 ### Deployment Role
 
-- **TargetRepository**: Target repository for deployment roles project
+- **TargetRepository**: Target repository for the deployment roles project
 
 ## Tag Configuration
 
-Tags are configured through the .env file:
+`Environment` is sourced from `config.env`:
 
-- TAG_COST_CENTER: Cost center for billing allocation
-- TAG_ENVIRONMENT: Environment (prd, stg, tst, dev)
-- TAG_OWNER: Resource owner identifier
+```bash
+TAG_ENVIRONMENT=prd
+```
 
-Repository and deployment metadata are automatically detected during deployment.
+All other tags are computed automatically at deploy time from git metadata and AWS identity.

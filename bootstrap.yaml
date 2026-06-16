@@ -7,14 +7,9 @@ Parameters:
     Description: 'AWS account alias (empty string if not set)'
     Default: ''
 
-  CostCenter:
+  DeployedBy:
     Type: String
-    Default: 'default'
-    Description: 'Cost center for billing allocation'
-
-  DeploymentRole:
-    Type: String
-    Description: 'IAM role ARN used for deployment'
+    Description: 'IAM principal ARN used for deployment'
 
   Environment:
     Type: String
@@ -24,24 +19,15 @@ Parameters:
   ManagedBy:
     Type: String
     Default: 'CloudFormation'
-    Description: 'Management tool'
+    Description: 'Deployment tool'
 
-  Owner:
+  ProjectName:
     Type: String
-    Default: 'stephenabbot'
-    Description: 'Resource owner'
+    Description: 'Project name (git repository name)'
 
-  Project:
-    Type: String
-    Description: 'Project in format org/repo-name'
-
-  Repository:
+  ProjectRepository:
     Type: String
     Description: 'Full git repository URL'
-
-  Region:
-    Type: String
-    Description: 'AWS region for regional resources, or na for global resources'
 
   TargetDeploymentRolesRepository:
     Type: String
@@ -85,26 +71,18 @@ Resources:
             Status: Enabled
             ExpirationInDays: 90
       Tags:
-        - Key: AccountId
-          Value: !Ref AWS::AccountId
-        - Key: AccountAlias
-          Value: !Ref AccountAlias
-        - Key: CostCenter
-          Value: !Ref CostCenter
-        - Key: DeploymentRole
-          Value: !Ref DeploymentRole
+        - Key: ProjectName
+          Value: !Ref ProjectName
+        - Key: ProjectRepository
+          Value: !Ref ProjectRepository
         - Key: Environment
           Value: !Ref Environment
         - Key: ManagedBy
           Value: !Ref ManagedBy
-        - Key: Owner
-          Value: !Ref Owner
-        - Key: Project
-          Value: !Ref Project
-        - Key: Region
-          Value: !Ref Region
-        - Key: Repository
-          Value: !Ref Repository
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
+        - Key: AccountAlias
+          Value: !Ref AccountAlias
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
 
@@ -162,26 +140,18 @@ Resources:
         DestinationBucketName: !Ref TerraformStateLogBucket
         LogFilePrefix: 'access-logs/'
       Tags:
-        - Key: AccountId
-          Value: !Ref AWS::AccountId
-        - Key: AccountAlias
-          Value: !Ref AccountAlias
-        - Key: CostCenter
-          Value: !Ref CostCenter
-        - Key: DeploymentRole
-          Value: !Ref DeploymentRole
+        - Key: ProjectName
+          Value: !Ref ProjectName
+        - Key: ProjectRepository
+          Value: !Ref ProjectRepository
         - Key: Environment
           Value: !Ref Environment
         - Key: ManagedBy
           Value: !Ref ManagedBy
-        - Key: Owner
-          Value: !Ref Owner
-        - Key: Project
-          Value: !Ref Project
-        - Key: Region
-          Value: !Ref Region
-        - Key: Repository
-          Value: !Ref Repository
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
+        - Key: AccountAlias
+          Value: !Ref AccountAlias
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
 
@@ -201,26 +171,18 @@ Resources:
         PointInTimeRecoveryEnabled: true
       DeletionProtectionEnabled: true
       Tags:
-        - Key: AccountId
-          Value: !Ref AWS::AccountId
-        - Key: AccountAlias
-          Value: !Ref AccountAlias
-        - Key: CostCenter
-          Value: !Ref CostCenter
-        - Key: DeploymentRole
-          Value: !Ref DeploymentRole
+        - Key: ProjectName
+          Value: !Ref ProjectName
+        - Key: ProjectRepository
+          Value: !Ref ProjectRepository
         - Key: Environment
           Value: !Ref Environment
         - Key: ManagedBy
           Value: !Ref ManagedBy
-        - Key: Owner
-          Value: !Ref Owner
-        - Key: Project
-          Value: !Ref Project
-        - Key: Region
-          Value: !Ref Region
-        - Key: Repository
-          Value: !Ref Repository
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
+        - Key: AccountAlias
+          Value: !Ref AccountAlias
     DeletionPolicy: Delete
     UpdateReplacePolicy: Delete
 
@@ -233,26 +195,18 @@ Resources:
         - !Ref OidcAudience
       ThumbprintList: !Ref OidcThumbprints
       Tags:
-        - Key: AccountId
-          Value: !Ref AWS::AccountId
-        - Key: AccountAlias
-          Value: !Ref AccountAlias
-        - Key: CostCenter
-          Value: !Ref CostCenter
-        - Key: DeploymentRole
-          Value: !Ref DeploymentRole
+        - Key: ProjectName
+          Value: !Ref ProjectName
+        - Key: ProjectRepository
+          Value: !Ref ProjectRepository
         - Key: Environment
           Value: !Ref Environment
         - Key: ManagedBy
           Value: !Ref ManagedBy
-        - Key: Owner
-          Value: !Ref Owner
-        - Key: Project
-          Value: !Ref Project
-        - Key: Region
-          Value: na
-        - Key: Repository
-          Value: !Ref Repository
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
+        - Key: AccountAlias
+          Value: !Ref AccountAlias
         - Key: OidcProvider
           Value: !Ref OidcProvider
 
@@ -312,26 +266,18 @@ Resources:
                   - dynamodb:DeleteItem
                 Resource: !GetAtt TerraformLockTable.Arn
       Tags:
-        - Key: AccountId
-          Value: !Ref AWS::AccountId
-        - Key: AccountAlias
-          Value: !Ref AccountAlias
-        - Key: CostCenter
-          Value: !Ref CostCenter
-        - Key: DeploymentRole
-          Value: !Ref DeploymentRole
+        - Key: ProjectName
+          Value: !Ref ProjectName
+        - Key: ProjectRepository
+          Value: !Ref ProjectRepository
         - Key: Environment
           Value: !Ref Environment
         - Key: ManagedBy
           Value: !Ref ManagedBy
-        - Key: Owner
-          Value: !Ref Owner
-        - Key: Project
-          Value: !Ref Project
-        - Key: Region
-          Value: na
-        - Key: Repository
-          Value: !Ref Repository
+        - Key: DeployedBy
+          Value: !Ref DeployedBy
+        - Key: AccountAlias
+          Value: !Ref AccountAlias
         - Key: TargetRepository
           Value: !Ref TargetDeploymentRolesRepository
 
@@ -344,16 +290,12 @@ Resources:
       Value: !Ref TerraformStateBucket
       Description: 'S3 bucket name for Terraform state storage'
       Tags:
-        AccountId: !Ref AWS::AccountId
-        AccountAlias: !Ref AccountAlias
-        CostCenter: !Ref CostCenter
-        DeploymentRole: !Ref DeploymentRole
+        ProjectName: !Ref ProjectName
+        ProjectRepository: !Ref ProjectRepository
         Environment: !Ref Environment
         ManagedBy: !Ref ManagedBy
-        Owner: !Ref Owner
-        Project: !Ref Project
-        Region: !Ref Region
-        Repository: !Ref Repository
+        DeployedBy: !Ref DeployedBy
+        AccountAlias: !Ref AccountAlias
 
   DynamoDBTableParameter:
     Type: AWS::SSM::Parameter
@@ -363,16 +305,12 @@ Resources:
       Value: !Ref TerraformLockTable
       Description: 'DynamoDB table name for Terraform state locking'
       Tags:
-        AccountId: !Ref AWS::AccountId
-        AccountAlias: !Ref AccountAlias
-        CostCenter: !Ref CostCenter
-        DeploymentRole: !Ref DeploymentRole
+        ProjectName: !Ref ProjectName
+        ProjectRepository: !Ref ProjectRepository
         Environment: !Ref Environment
         ManagedBy: !Ref ManagedBy
-        Owner: !Ref Owner
-        Project: !Ref Project
-        Region: !Ref Region
-        Repository: !Ref Repository
+        DeployedBy: !Ref DeployedBy
+        AccountAlias: !Ref AccountAlias
 
   OidcProviderParameter:
     Type: AWS::SSM::Parameter
@@ -382,16 +320,12 @@ Resources:
       Value: !Ref OidcProviderResource
       Description: 'OIDC provider ARN for CI/CD authentication'
       Tags:
-        AccountId: !Ref AWS::AccountId
-        AccountAlias: !Ref AccountAlias
-        CostCenter: !Ref CostCenter
-        DeploymentRole: !Ref DeploymentRole
+        ProjectName: !Ref ProjectName
+        ProjectRepository: !Ref ProjectRepository
         Environment: !Ref Environment
         ManagedBy: !Ref ManagedBy
-        Owner: !Ref Owner
-        Project: !Ref Project
-        Region: !Ref Region
-        Repository: !Ref Repository
+        DeployedBy: !Ref DeployedBy
+        AccountAlias: !Ref AccountAlias
 
   DeploymentRolesRoleParameter:
     Type: AWS::SSM::Parameter
@@ -401,16 +335,12 @@ Resources:
       Value: !GetAtt DeploymentRolesRole.Arn
       Description: 'IAM role ARN for foundation-iam-deploy-roles project'
       Tags:
-        AccountId: !Ref AWS::AccountId
-        AccountAlias: !Ref AccountAlias
-        CostCenter: !Ref CostCenter
-        DeploymentRole: !Ref DeploymentRole
+        ProjectName: !Ref ProjectName
+        ProjectRepository: !Ref ProjectRepository
         Environment: !Ref Environment
         ManagedBy: !Ref ManagedBy
-        Owner: !Ref Owner
-        Project: !Ref Project
-        Region: !Ref Region
-        Repository: !Ref Repository
+        DeployedBy: !Ref DeployedBy
+        AccountAlias: !Ref AccountAlias
 
 Outputs:
   TerraformStateBucket:

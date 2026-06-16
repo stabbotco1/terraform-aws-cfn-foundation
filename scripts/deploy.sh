@@ -436,14 +436,11 @@ EOF
     --capabilities CAPABILITY_NAMED_IAM \
     --parameters \
       ParameterKey=AccountAlias,ParameterValue="$ACCOUNT_ALIAS" \
-      ParameterKey=CostCenter,ParameterValue="$COST_CENTER" \
-      ParameterKey=DeploymentRole,ParameterValue="$DEPLOYMENT_ROLE" \
+      ParameterKey=DeployedBy,ParameterValue="$DEPLOYMENT_ROLE" \
       ParameterKey=Environment,ParameterValue="$ENVIRONMENT" \
       ParameterKey=ManagedBy,ParameterValue="$MANAGED_BY" \
-      ParameterKey=Owner,ParameterValue="$OWNER" \
-      ParameterKey=Project,ParameterValue="$PROJECT" \
-      ParameterKey=Region,ParameterValue="$REGION" \
-      ParameterKey=Repository,ParameterValue="$REPOSITORY" \
+      ParameterKey=ProjectName,ParameterValue="$PROJECT" \
+      ParameterKey=ProjectRepository,ParameterValue="$REPOSITORY" \
       ParameterKey=TargetDeploymentRolesRepository,ParameterValue="$TARGET_REPOSITORY" \
       ParameterKey=OidcProvider,ParameterValue="$OIDC_PROVIDER" \
       ParameterKey=OidcUrl,ParameterValue="$OIDC_URL" \
@@ -494,14 +491,11 @@ elif [ "$ACTION" = "create" ]; then
     --capabilities CAPABILITY_NAMED_IAM \
     --parameters \
       ParameterKey=AccountAlias,ParameterValue="$ACCOUNT_ALIAS" \
-      ParameterKey=CostCenter,ParameterValue="$COST_CENTER" \
-      ParameterKey=DeploymentRole,ParameterValue="$DEPLOYMENT_ROLE" \
+      ParameterKey=DeployedBy,ParameterValue="$DEPLOYMENT_ROLE" \
       ParameterKey=Environment,ParameterValue="$ENVIRONMENT" \
       ParameterKey=ManagedBy,ParameterValue="$MANAGED_BY" \
-      ParameterKey=Owner,ParameterValue="$OWNER" \
-      ParameterKey=Project,ParameterValue="$PROJECT" \
-      ParameterKey=Region,ParameterValue="$REGION" \
-      ParameterKey=Repository,ParameterValue="$REPOSITORY" \
+      ParameterKey=ProjectName,ParameterValue="$PROJECT" \
+      ParameterKey=ProjectRepository,ParameterValue="$REPOSITORY" \
       ParameterKey=TargetDeploymentRolesRepository,ParameterValue="$TARGET_REPOSITORY" \
       ParameterKey=OidcProvider,ParameterValue="$OIDC_PROVIDER" \
       ParameterKey=OidcUrl,ParameterValue="$OIDC_URL" \
@@ -529,14 +523,11 @@ else
     --capabilities CAPABILITY_NAMED_IAM \
     --parameters \
       ParameterKey=AccountAlias,ParameterValue="$ACCOUNT_ALIAS" \
-      ParameterKey=CostCenter,ParameterValue="$COST_CENTER" \
-      ParameterKey=DeploymentRole,ParameterValue="$DEPLOYMENT_ROLE" \
+      ParameterKey=DeployedBy,ParameterValue="$DEPLOYMENT_ROLE" \
       ParameterKey=Environment,ParameterValue="$ENVIRONMENT" \
       ParameterKey=ManagedBy,ParameterValue="$MANAGED_BY" \
-      ParameterKey=Owner,ParameterValue="$OWNER" \
-      ParameterKey=Project,ParameterValue="$PROJECT" \
-      ParameterKey=Region,ParameterValue="$REGION" \
-      ParameterKey=Repository,ParameterValue="$REPOSITORY" \
+      ParameterKey=ProjectName,ParameterValue="$PROJECT" \
+      ParameterKey=ProjectRepository,ParameterValue="$REPOSITORY" \
       ParameterKey=TargetDeploymentRolesRepository,ParameterValue="$TARGET_REPOSITORY" \
       ParameterKey=OidcProvider,ParameterValue="$OIDC_PROVIDER" \
       ParameterKey=OidcUrl,ParameterValue="$OIDC_URL" \
