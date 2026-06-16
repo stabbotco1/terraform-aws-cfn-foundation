@@ -446,16 +446,12 @@ EOF
       ParameterKey=OidcThumbprints,ParameterValue=\"$OIDC_THUMBPRINTS\" \
       ParameterKey=OidcAudience,ParameterValue="$OIDC_AUDIENCE" \
     --tags \
-      Key=AccountId,Value="$ACCOUNT_ID" \
       Key=AccountAlias,Value="$ACCOUNT_ALIAS" \
-      Key=CostCenter,Value="$COST_CENTER" \
-      Key=DeploymentRole,Value="$DEPLOYMENT_ROLE" \
+      Key=DeployedBy,Value="$DEPLOYMENT_ROLE" \
       Key=Environment,Value="$ENVIRONMENT" \
       Key=ManagedBy,Value="$MANAGED_BY" \
-      Key=Owner,Value="$OWNER" \
-      Key=Project,Value="$PROJECT" \
-      Key=Region,Value="$REGION" \
-      Key=Repository,Value="$REPOSITORY" 2>&1 || {
+      Key=ProjectName,Value="$PROJECT" \
+      Key=ProjectRepository,Value="$REPOSITORY" 2>&1 || {
     echo "✗ Failed to create import changeset"
     echo "  This can happen if bucket configurations don't match the template"
     rm -f /tmp/resources-to-import.json
@@ -509,16 +505,12 @@ elif [ "$ACTION" = "create" ]; then
       ParameterKey=OidcAudience,ParameterValue="$OIDC_AUDIENCE" \
     --enable-termination-protection \
     --tags \
-      Key=AccountId,Value="$ACCOUNT_ID" \
       Key=AccountAlias,Value="$ACCOUNT_ALIAS" \
-      Key=CostCenter,Value="$COST_CENTER" \
-      Key=DeploymentRole,Value="$DEPLOYMENT_ROLE" \
+      Key=DeployedBy,Value="$DEPLOYMENT_ROLE" \
       Key=Environment,Value="$ENVIRONMENT" \
       Key=ManagedBy,Value="$MANAGED_BY" \
-      Key=Owner,Value="$OWNER" \
-      Key=Project,Value="$PROJECT" \
-      Key=Region,Value="$REGION" \
-      Key=Repository,Value="$REPOSITORY"
+      Key=ProjectName,Value="$PROJECT" \
+      Key=ProjectRepository,Value="$REPOSITORY"
 
   echo "✓ CloudFormation stack creation initiated"
   echo "  Waiting for stack creation to complete..."
@@ -547,16 +539,12 @@ else
       ParameterKey=OidcThumbprints,ParameterValue=\"$OIDC_THUMBPRINTS\" \
       ParameterKey=OidcAudience,ParameterValue="$OIDC_AUDIENCE" \
     --tags \
-      Key=AccountId,Value="$ACCOUNT_ID" \
       Key=AccountAlias,Value="$ACCOUNT_ALIAS" \
-      Key=CostCenter,Value="$COST_CENTER" \
-      Key=DeploymentRole,Value="$DEPLOYMENT_ROLE" \
+      Key=DeployedBy,Value="$DEPLOYMENT_ROLE" \
       Key=Environment,Value="$ENVIRONMENT" \
       Key=ManagedBy,Value="$MANAGED_BY" \
-      Key=Owner,Value="$OWNER" \
-      Key=Project,Value="$PROJECT" \
-      Key=Region,Value="$REGION" \
-      Key=Repository,Value="$REPOSITORY" 2>&1) || {
+      Key=ProjectName,Value="$PROJECT" \
+      Key=ProjectRepository,Value="$REPOSITORY" 2>&1) || {
 
     # Check if error is "No updates"
     if echo "$UPDATE_OUTPUT" | grep -q "No updates are to be performed"; then
