@@ -3,6 +3,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+cd "$PROJECT_ROOT"
+
 # Disable AWS CLI pager
 export AWS_PAGER=""
 
@@ -11,7 +15,7 @@ echo "Deploying CloudFormation foundation..."
 # Verify prerequisites (includes git state checks)
 echo ""
 echo "Step 1: Verifying prerequisites..."
-./scripts/verify-prerequisites.sh || exit 1
+"${SCRIPT_DIR}/verify-prerequisites.sh" || exit 1
 
 # Load environment variables from config.env file
 if [ -f "config.env" ]; then
