@@ -96,16 +96,6 @@ if [ "$BUCKET" != "unknown" ]; then
       --query 'ServerSideEncryptionConfiguration.Rules[0].ApplyServerSideEncryptionByDefault.SSEAlgorithm' \
       --output text 2>/dev/null || echo "None")
     echo "Encryption: $ENCRYPTION"
-    
-    # Object count and size
-    OBJECT_COUNT=$(aws s3 ls "s3://$BUCKET" --recursive | wc -l)
-    echo "Objects: $OBJECT_COUNT"
-    
-    if [ "$OBJECT_COUNT" -gt 0 ]; then
-      echo ""
-      echo "Recent objects:"
-      aws s3 ls "s3://$BUCKET" --recursive | tail -5
-    fi
   else
     echo "Status: ✗ Not accessible"
   fi
@@ -140,23 +130,6 @@ if [ "$TABLE" != "unknown" ]; then
       --query 'ContinuousBackupsDescription.PointInTimeRecoveryDescription.PointInTimeRecoveryStatus' \
       --output text 2>/dev/null || echo "DISABLED")
     echo "Point-in-time Recovery: $PITR"
-    
-    # Item count
-    ITEM_COUNT=$(aws dynamodb scan \
-      --table-name "$TABLE" \
-      --select COUNT \
-      --query 'Count' \
-      --output text 2>/dev/null || echo "0")
-    echo "Active Locks: $ITEM_COUNT"
-    
-    if [ "$ITEM_COUNT" -gt 0 ]; then
-      echo ""
-      echo "Active locks:"
-      aws dynamodb scan \
-        --table-name "$TABLE" \
-        --query 'Items[].LockID.S' \
-        --output text | tr '\t' '\n' | sed 's/^/  /'
-    fi
   else
     echo "Status: ✗ Not accessible"
   fi
